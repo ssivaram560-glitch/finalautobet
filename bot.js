@@ -491,43 +491,52 @@ function updateAfterResult(userId, wasWin) {
     initState(userId);
     const state = userStates[userId];
 
-
-    // ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
+    // எக்ஸ்ட்ரா வேரியபிள்ஸ் இல்லைனா செட் பண்ணிக்கிறோம்
     if (!state.history) state.history = [];
+    if (state.recoveryCount === undefined) state.recoveryCount = 0;
+
+    // 1. ஏற்கனவே RECOVERY மோடு ஆக்டிவ் ஆக இருந்தால்
+    if (state.mode === "RECOVERY") {
+        state.recoveryCount -= 1; // ஒரு பிரிடிக்ஷன் முடிஞ்சிருச்சு, சோ கவுண்ட்டை குறைக்கிறோம்
+
+        // கவுண்ட் 0-க்கு வரும்போது (சாதாரண பேட்டர்னுக்கு 1-ல இருந்து 0 ஆகும், அல்ட்ராவுக்கு 3-ல இருந்து 0 ஆகும்)
+        if (state.recoveryCount <= 0) {
+            state.mode = "NORMAL";
+            state.history = []; // மோடு மாறும்போது பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி!
+            state.recoveryCount = 0;
+        }
+        
+        // RECOVERY மோடுல நடக்குற கேம் ரிசல்ட்ஸ் பழைய நார்மல் பேட்டர்னை பாதிக்கக் கூடாது என்பதால் return செய்கிறோம்
+        return; 
+    }
+
+    // 2. NORMAL மோடு ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
     const histStr = state.history.join(',');
 
-    // 1. RECOVERY மோட் முடிஞ்சா, ரீசெட் பண்ணிடுவோம்
-    if (state.mode === "RECOVERY") {
-        state.mode = "NORMAL";
-        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
-        return;
-    }
-
-    // 2. பேட்டர்ன் அனாலிசிஸ்
-    // Pattern 1: (W,W,L), (W,W,W,L) -> RECOVERY
-    if (histStr.endsWith('W,W,L') || histStr.endsWith('W,W,W,L')) {
+    // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (4 அல்லது அதற்கு மேற்பட்ட தொடர் நஷ்டங்கள்)
+    // எ.கா: L,L,L,L அல்லது W,L,L,L,L
+    if (/(L,L,L,L+)$/.test(histStr)) {
         state.mode = "RECOVERY";
-        state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
+        state.recoveryCount = 3; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
+        state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
     }
-    // Pattern 1.1: (W,L) -> NORMAL (ரீசெட் மட்டும்)
-    else if (histStr.endsWith('W,L')) {
-        state.mode = "NORMAL";
-        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
-    }
-    // Pattern 2: 4+ W followed by L -> NORMAL (ரீசெட் மட்டும்)
-    else if (/(W,W,W,W+),L$/.test(histStr)) {
-        state.mode = "NORMAL";
-        state.history = []; 
-    }
-    // Pattern 3: 4+ L -> RECOVERY
-    else if (/(L,L,L,L+)/.test(histStr)) {
+    // 4. சாதாரண பேட்டர்ன்ஸ் அனாலிசிஸ் (ஒரே ஒரு ரெக்கவரி பிரிடிக்ஷன் மட்டும்)
+    else if (
+        histStr.endsWith('W,L') || 
+        histStr.endsWith('L,W') || 
+        histStr.endsWith('L,L,W') || 
+        histStr.endsWith('L,L,L,W') ||
+        histStr.endsWith('W,W,L') ||
+        histStr.endsWith('W,W,W,L')
+    ) {
         state.mode = "RECOVERY";
-        state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
-    }
-    // Default
+        state.recoveryCount = 1; // ஒரே ஒரு பிரிடிக்ஷன் மட்டும் ரெக்கவரி மோடு!
+        state.history = [];      // இங்கேயும் பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
+    } 
+    // எந்த பேட்டர்னும் இல்லைனா நார்மலாவே தொடரும்
     else {
         state.mode = "NORMAL";
     }
