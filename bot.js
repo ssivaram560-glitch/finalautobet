@@ -508,7 +508,7 @@ if (currentResult === 0) {
         // கவுண்ட் 0-க்கு வரும்போது (சாதாரண பேட்டர்னுக்கு 1-ல இருந்து 0 ஆகும், அல்ட்ராவுக்கு 3-ல இருந்து 0 ஆகும்)
         if (state.recoveryCount <= 0) {
             state.mode = "NORMAL";
-            state.history = []; // மோடு மாறும்போது பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி!
+            state.history = [];  // மோடு மாறும்போது பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி!
             state.recoveryCount = 0;
         }
         
@@ -529,19 +529,7 @@ if (currentResult === 0) {
         state.recoveryCount = 3; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
         state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
     }
-    // 4. சாதாரண பேட்டர்ன்ஸ் அனாலிசிஸ் (ஒரே ஒரு ரெக்கவரி பிரிடிக்ஷன் மட்டும்)
-    else if (
-        histStr.endsWith('L,W,L') || 
-        histStr.endsWith('W,L,W') || 
-        histStr.endsWith('W,L,L,W') || 
-        histStr.endsWith('W,L,L,L,W') ||
-        histStr.endsWith('L,W,W,L') ||
-        histStr.endsWith('L,W,W,W,L')
-    ) {
-        state.mode = "RECOVERY";
-        state.recoveryCount = 1; // ஒரே ஒரு பிரிடிக்ஷன் மட்டும் ரெக்கவரி மோடு!
-        state.history = [];      // இங்கேயும் பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
-    } 
+
     // எந்த பேட்டர்னும் இல்லைனா நார்மலாவே தொடரும்
     else {
         state.mode = "NORMAL";
