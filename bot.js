@@ -487,9 +487,15 @@ if (currentResult === 0) {
     };
 }
 
-function updateAfterResult(userId, wasWin) {
+function updateAfterResult(userId, wasWin, currentResult) {
     initState(userId);
     const state = userStates[userId];
+
+if (currentResult === 0) {
+        state.history = [];
+        state.mode = "NORMAL";
+        return; 
+    }
 
     // எக்ஸ்ட்ரா வேரியபிள்ஸ் இல்லைனா செட் பண்ணிக்கிறோம்
     if (!state.history) state.history = [];
@@ -518,19 +524,19 @@ function updateAfterResult(userId, wasWin) {
 
     // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (4 அல்லது அதற்கு மேற்பட்ட தொடர் நஷ்டங்கள்)
     // எ.கா: L,L,L,L அல்லது W,L,L,L,L
-    if (/(L,L,L,L+)$/.test(histStr)) {
+    if (/(W,L,L,L,L,L+)$/.test(histStr)) {
         state.mode = "RECOVERY";
         state.recoveryCount = 3; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
         state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
     }
     // 4. சாதாரண பேட்டர்ன்ஸ் அனாலிசிஸ் (ஒரே ஒரு ரெக்கவரி பிரிடிக்ஷன் மட்டும்)
     else if (
-        histStr.endsWith('W,L') || 
-        histStr.endsWith('L,W') || 
-        histStr.endsWith('L,L,W') || 
-        histStr.endsWith('L,L,L,W') ||
-        histStr.endsWith('W,W,L') ||
-        histStr.endsWith('W,W,W,L')
+        histStr.endsWith('L,W,L') || 
+        histStr.endsWith('W,L,W') || 
+        histStr.endsWith('W,L,L,W') || 
+        histStr.endsWith('W,L,L,L,W') ||
+        histStr.endsWith('L,W,W,L') ||
+        histStr.endsWith('L,W,W,W,L')
     ) {
         state.mode = "RECOVERY";
         state.recoveryCount = 1; // ஒரே ஒரு பிரிடிக்ஷன் மட்டும் ரெக்கவரி மோடு!
