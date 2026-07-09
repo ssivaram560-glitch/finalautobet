@@ -213,7 +213,7 @@ async function autoLogin(userId, chatId, silent = false) {
         });
 
         // 1. லாகின் பக்கம்
-        await page.goto('https://bdgwina.me/#/login', { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'networkidle2', timeout: 60000 });
         await page.waitForSelector('input');
         const inputs = await page.$$('input');
         await inputs[0].type(phone, { delay: 100 });
@@ -273,6 +273,9 @@ async function autoLogin(userId, chatId, silent = false) {
 // ============================================================
 //  PLACE BET (Modified to capture token from response if available)
 // ============================================================
+// ============================================================
+//  IMPROVED PLACE BET FUNCTION (Silent Retries & Multi-Request Fix)
+// ============================================================
 async function placeBet(userId, chatId, period, prediction, predType, level) {
     let token = getToken(userId);
     if (!token || token.length < 20) {
@@ -288,6 +291,10 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     const cfg     = autobetCfg[userId];
     const betMult = cfg.customBets[level-1] || (cfg.baseBet * MULT[level-1]);
     let bc = "";
+
+    const maxRetries = 3; // Maximum number of retries
+    const retryDelayMs = 2000; // 2 seconds delay between retries
+
     if (predType==="SIZE")  bc = prediction==="BIG" ? "BigSmall_Big" : "BigSmall_Small";
     if (predType==="COLOR") bc = prediction==="RED" ? "Color_Red"    : "Color_Green";
 
@@ -306,7 +313,8 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 
     console.log(`[BET] ${bc} ₹${betMult} L${level} for Period: ${period}`);
 
-    try {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
         const r = await axios.post(BET_URL, payload, {
             headers: {
                 "authorization":    "Bearer "+token,
@@ -346,6 +354,13 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 
         if (d.code===0||d.msg==="Succeed"||d.msgCode===0) return {ok:true, amt:betMult, bc};
 
+        const retryableErrors = ["Param is Invalid", "The issue number does not exist", "period current settled"];
+        if (d.msg && retryableErrors.some(errStr => d.msg.toLowerCase().includes(errStr))) {
+            console.log(`[BET RETRY] Retryable error: ${d.msg}. Retrying in ${retryDelayMs / 1000}s... (Attempt ${i + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+            continue; // Retry
+        }
+
         if (d.code===401||d.code===40100||(d.msg&&(d.msg.toLowerCase().includes("token")||d.msg.toLowerCase().includes("expired")))) {
             userTokens[userId]="";
             await send(chatId,"🔄 Token expired — Re-login...");
@@ -358,8 +373,11 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         await send(chatId,"❌ Bet fail: "+(d.msg||JSON.stringify(d).substr(0,60)));
         return false;
     } catch(err) {
+        // Network errors or other exceptions during the request
         console.error("[BET ERR]",err.message);
-        // If there's a network error or other issue, and it's possibly token related, try re-logging in.
+        // If it's a network error, we might want to retry as well, but only if it's not a token error.
+        // For now, let's assume network errors are not retryable in the same way as specific API messages.
+        // If the error is token related, handle it as before.
         if (err.response && (err.response.status === 401 || (err.response.data && (err.response.data.msg && (err.response.data.msg.toLowerCase().includes("token") || err.response.data.msg.toLowerCase().includes("expired")))))) {
             userTokens[userId]="";
             await send(chatId,"🔄 Token error during bet — Re-login...");
@@ -368,10 +386,16 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
             else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
             return false;
         }
+        // If it's not a token error, and it's a network error, we can consider retrying here too.
+        // For now, we'll just log and exit if it's a general network error after max retries.
         await send(chatId,"❌ Network error during bet: "+err.message);
         return false;
     }
 }
+// If all retries fail, return false
+return false;
+}
+
 
 // ============================================================
 //  FETCH HISTORY — Multiple fallback URLs for reliability
