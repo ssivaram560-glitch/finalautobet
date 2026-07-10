@@ -71,7 +71,7 @@ function initUser(id) {
     if (!sentPeriods[id])  sentPeriods[id]  = new Set();
     if (!autobetCfg[id])   autobetCfg[id]   = { watch:false, watchLoss:5, baseBet:1, maxLvl:5, enabled:false, customBets:[1,3,9,27,81] };
     if (!autobetState[id]) autobetState[id] = { level:1, consecutiveLoss:0, inMart:false };
-    if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0 };
+    if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
 function hasAccess(id)  { return !!(usersAccess[id] && Date.now() < usersAccess[id]); }
 function daysLeft(id)   { return usersAccess[id] ? ((usersAccess[id]-Date.now())/86400000).toFixed(1) : "0"; }
@@ -354,12 +354,12 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 
         if (d.code===0||d.msg==="Succeed"||d.msgCode===0) return {ok:true, amt:betMult, bc};
 
-        const retryableErrors = ["Param is Invalid", "The issue number does not exist", "period current settled"];
-        if (d.msg && retryableErrors.some(errStr => d.msg.toLowerCase().includes(errStr))) {
-            console.log(`[BET RETRY] Retryable error: ${d.msg}. Retrying in ${retryDelayMs / 1000}s... (Attempt ${i + 1}/${maxRetries})`);
-            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-            continue; // Retry
-        }
+       const retryableErrors = ["param is invalid", "the issue number does not exist", "period current settled"];
+if (d.msg && retryableErrors.some(errStr => d.msg.toLowerCase().includes(errStr))) {
+    console.log(`[BET RETRY] Retryable error: ${d.msg}. Retrying in ${retryDelayMs / 1000}s... (Attempt ${i + 1}/${maxRetries})`);
+    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+    continue; // Retry
+}
 
         if (d.code===401||d.code===40100||(d.msg&&(d.msg.toLowerCase().includes("token")||d.msg.toLowerCase().includes("expired")))) {
             userTokens[userId]="";
@@ -586,7 +586,7 @@ function shouldBetNow(userId) {
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
-    pt.totalBets++;pt.wins++;pt.pnl+=profit;
+    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
     st.level=1;st.inMart=false;st.consecutiveLoss=0;
     await send(chatId,
@@ -608,7 +608,7 @@ async function handleWin(userId, chatId, actual, num) {
 async function handleLoss(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-    pt.totalBets++;pt.losses++;pt.pnl-=amt;
+    pt.totalBets++;pt.losses++;pt.pnl-=amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.lossStreak++;pt.winStreak=0;if(pt.lossStreak>pt.maxL)pt.maxL=pt.lossStreak;
     if(st.level<cfg.maxLvl){
         st.level++;st.inMart=true;
@@ -855,7 +855,7 @@ function userMenu(id){
     if(isAdmin(id))rows.push(["👑 Admin Panel"]);
     return{keyboard:rows,resize_keyboard:true};
 }
-const ownerMenu={keyboard:[["👥 All Users","👮 All Admins"],["👤 Add Admin","🗑 Remove Admin"],["🔑 Generate Key","📋 All Keys"],["🟢 Add User","🔴 Remove User"],["🔐 Set Token","📊 All Stats"],["🚪 Owner Logout"]],resize_keyboard:true};
+const ownerMenu={keyboard:[["👥 All Users","👮 All Admins"],["👤 Add Admin","🗑 Remove Admin"],["🔑 Generate Key","📋 All Keys"],["🟢 Add User","🔴 Remove User"],["🔐 Set Token","📊 All Status"],["🚪 Owner Logout"]],resize_keyboard:true};
 const adminMenu={keyboard:[["👥 Active Users","🔑 Generate Key"],["🟢 Add User","🔴 Remove User"],["📋 All Keys","🚪 Admin Logout"]],resize_keyboard:true};
 const autobetMenu={keyboard:[["✅ Enable AutoBet","❌ Disable AutoBet"],["👀 Watch Mode ON","👀 Watch Mode OFF"],["💰 Set Base Bet","📈 Set Max Level"],["🔢 Set Watch Losses","📊 AutoBet Status"],["📝 Set Custom Bets","🔙 Back"]],resize_keyboard:true};
 
@@ -944,7 +944,7 @@ function addHandlers(){
         if(!text||text.startsWith("/"))return;
         initUser(id);
 
-        const OB=["👥 All Users","👮 All Admins","👤 Add Admin","🗑 Remove Admin","🔑 Generate Key","📋 All Keys","🟢 Add User","🔴 Remove User","🔐 Set Token","📊 All Stats","🚪 Owner Logout"];
+        const OB=["👥 All Users","👮 All Admins","👤 Add Admin","🗑 Remove Admin","🔑 Generate Key","📋 All Keys","🟢 Add User","🔴 Remove User","🔐 Set Token","📊 All Status","🚪 Owner Logout"];
         const AB=["👥 Active Users","🔑 Generate Key","🟢 Add User","🔴 Remove User","📋 All Keys","🚪 Admin Logout"];
 
         if(id===OWNER_ID&&ownerState){
@@ -969,7 +969,29 @@ function addHandlers(){
             if(text==="🟢 Add User")     {ownerState={action:"adduser"};return send(OWNER_ID,"User ID:");}
             if(text==="🔴 Remove User")  {ownerState={action:"removeuser"};return send(OWNER_ID,"User ID?");}
             if(text==="🔐 Set Token")    {ownerState={action:"settoken"};return send(OWNER_ID,"Token paste:");}
-            if(text==="📊 All Stats")    {const lines=Object.entries(stats).map(([id,s])=>"👤 "+id+": "+s.win+"W/"+s.loss+"L");return send(OWNER_ID,lines.join("\n")||"No stats");}
+            if(text==="📊 All Status")    {
+                const ids = Object.keys(usersAccess);
+                if(ids.length === 0) return send(OWNER_ID, "No users found.");
+                
+                let report = "📊 TEAM MEMBERS ALL STATUS 📊\n\n";
+                ids.forEach(uid => {
+                    initUser(uid);
+                    const pt = profitTrack[uid];
+                    const st = autobetState[uid];
+                    const s = stats[uid];
+                    const pnlStr = (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2);
+                    
+                    report += `👤 ID: ${uid}\n`;
+                    report += `💰 Total Bet: ₹${(pt.totalBetAmount || 0).toFixed(2)}\n`;
+                    report += `📈 Profit: ₹${pnlStr}\n`;
+                    report += `📉 Max Loss: ${pt.maxL || 0} streak\n`;
+                    report += `🔥 Win Strike: ${pt.maxW || 0} streak\n`;
+                    report += `🎮 Playing Level: L${st.level}\n`;
+                    report += `📊 Win/Loss: ${pt.wins}W / ${pt.losses}L\n`;
+                    report += `------------------------\n`;
+                });
+                return send(OWNER_ID, report);
+            }
             if(text==="🚪 Owner Logout") {ownerLoggedIn=false;return send(OWNER_ID,"🔒 Out.",{reply_markup:userMenu(id)});}
         }
 
