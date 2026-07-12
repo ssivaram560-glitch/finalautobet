@@ -237,7 +237,7 @@ async function autoLogin(userId, chatId, silent = false) {
         });
 
         // 1. லாகின் பக்கம்
-        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'networkidle2', timeout: 70000 });
         await page.waitForSelector('input');
         const inputs = await page.$$('input');
         await inputs[0].type(phone, { delay: 100 });
@@ -246,7 +246,7 @@ async function autoLogin(userId, chatId, silent = false) {
 
         // 2. லாகின் முடிந்து ஹோம் பேஜ் வர வரை காத்திரு
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
-        await new Promise(r => setTimeout(r, 4000));
+        await new Promise(r => setTimeout(r, 8000));
 
         // 3. பாப்-அப் இருந்தால் க்ளோஸ் செய்
         await page.evaluate(() => {
@@ -261,7 +261,7 @@ async function autoLogin(userId, chatId, silent = false) {
             const lotteryBtn = navItems.find(el => el.innerText.trim() === 'Lottery');
             if (lotteryBtn) lotteryBtn.click();
         });
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 4000));
 
         // 5. Win Go பட்டனை கிளிக் செய்
         await page.evaluate(() => {
@@ -273,7 +273,7 @@ async function autoLogin(userId, chatId, silent = false) {
         // 6. டோக்கன் கிடைச்சதான்னு 15 வினாடி வரை செக் பண்ணு
         for (let i = 0; i < 15; i++) {
             if (capturedToken) break;
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 20000));
         }
 
         if (capturedToken) {
