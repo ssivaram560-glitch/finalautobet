@@ -218,8 +218,9 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
- const browser = await puppeteer.launch({
+const browser = await puppeteer.launch({
     headless: true,
+    executablePath: '/usr/bin/google-chrome', // Render-ல் குரோம் பெரும்பாலும் இந்த லொகேஷன்ல தான் இருக்கும்
     args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -228,9 +229,7 @@ async function autoLogin(userId, chatId, silent = false) {
         '--no-zygote',
         '--single-process'
     ]
-    // executablePath-ஐ இங்க ஆட் பண்ணாதே!
 });
-
     try {
         const page = await browser.newPage();
         // Render RAM optimization
