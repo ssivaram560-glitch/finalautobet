@@ -223,10 +223,8 @@ async function autoLogin(userId, chatId, silent = false) {
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
     });
 
-    try {
+   try {
         const page = await browser.newPage();
-        // Render RAM optimization
-        await page.setDefaultNavigationTimeout(90000); 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         let capturedToken = null;
@@ -239,32 +237,16 @@ async function autoLogin(userId, chatId, silent = false) {
         });
 
         // 1. லாகின் பக்கம்
-        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        
-        // Wait for inputs to appear
-        await page.waitForSelector('input', { timeout: 30000 });
+        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.waitForSelector('input');
         const inputs = await page.$$('input');
-        
-        if (inputs.length < 2) throw new Error("Login inputs not found");
-
-        await inputs[0].type(phone, { delay: 50 });
-        await inputs[1].type(pass, { delay: 50 });
-        
-        // Click login button
-        await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const loginBtn = btns.find(b => b.innerText.includes('Log in') || b.innerText.includes('Login'));
-            if (loginBtn) loginBtn.click();
-            else document.querySelector('form')?.submit();
-        });
+        await inputs[0].type(phone, { delay: 100 });
+        await inputs[1].type(pass, { delay: 100 });
+        await page.keyboard.press('Enter');
 
         // 2. லாகின் முடிந்து ஹோம் பேஜ் வர வரை காத்திரு
-        try {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
-        } catch (e) {
-            console.log("Navigation timeout, but checking if we are logged in...");
-        }
-        await new Promise(r => setTimeout(r, 5000));
+        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+        await new Promise(r => setTimeout(r, 4000));
 
         // 3. பாப்-அப் இருந்தால் க்ளோஸ் செய்
         await page.evaluate(() => {
