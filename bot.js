@@ -218,9 +218,12 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
+// இந்த லைனை டெலீட் பண்ணு
+// executablePath: '/usr/bin/google-chrome', 
+
+// இப்படி மட்டும் வை:
 const browser = await puppeteer.launch({
     headless: true,
-    executablePath: '/usr/bin/google-chrome', // Render-ல் குரோம் பெரும்பாலும் இந்த லொகேஷன்ல தான் இருக்கும்
     args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
