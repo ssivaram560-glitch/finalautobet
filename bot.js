@@ -218,18 +218,17 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
-  const browser = await puppeteer.launch({
+ const browser = await puppeteer.launch({
     headless: true,
     args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', // இது மெமரி பிரச்சனைக்கு ரொம்ப முக்கியம்
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
         '--no-zygote',
-        '--single-process', // Render-ல் இதை மட்டும் கவனி, சில நேரம் இது எரர் கொடுக்கும்
-        '--disable-gpu'
+        '--single-process'
     ]
+    // executablePath-ஐ இங்க ஆட் பண்ணாதே!
 });
 
     try {
