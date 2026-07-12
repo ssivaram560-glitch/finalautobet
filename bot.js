@@ -199,9 +199,6 @@ async function fetchCaptcha() {
     }
 }
 
-// ============================================================
-//  AUTO LOGIN (PUPPETEER VERSION)
-// ============================================================
 let loginLock = {};
 let userTokens = {}; // Assuming userTokens is managed externally
 
@@ -218,21 +215,11 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
-// இந்த லைனை டெலீட் பண்ணு
-// executablePath: '/usr/bin/google-chrome', 
+    const browser = await puppeteer.launch({
+        headless: true, 
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
+    });
 
-// இப்படி மட்டும் வை:
-const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-zygote',
-        '--single-process'
-    ]
-});
     try {
         const page = await browser.newPage();
         // Render RAM optimization
@@ -249,7 +236,8 @@ const browser = await puppeteer.launch({
         });
 
         // 1. லாகின் பக்கம் - load condition changed for speed
-await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });        
+        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
+        
         // Wait for inputs to appear
         await page.waitForSelector('input', { timeout: 30000 });
         const inputs = await page.$$('input');
@@ -269,7 +257,7 @@ await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded'
 
         // 2. லாகின் முடிந்து ஹோம் பேஜ் வர வரை காத்திரு
         try {
-await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
         } catch (e) {
             console.log("Navigation timeout, but checking if we are logged in...");
         }
