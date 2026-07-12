@@ -11,7 +11,7 @@ const BOT_TOKEN    = "8692459169:AAFW_sv72xScUpn0xFsaPTCuzJpNLO0EIBU";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@OnlineEarningapp_bot";
-const REG_LINK     = "https://www.goaoko.com/#/register?invitationCode=457367799017";
+const REG_LINK     = "https://bdgwinj.com//#/register?invitationCode=6435414007795";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
@@ -31,7 +31,7 @@ const PORT = process.env.PORT || 5000;
 http.createServer((req, res) => {
     res.writeHead(200);
     res.end('SIVA BOT OK');
-}).listen(PORT, () => console.log(`✅ OHH Keep-alive server on port ${PORT}`));
+}).listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
 
 // Self-ping every 14 minutes to prevent sleep
 const RENDER_URL = process.env.RENDER_URL || "";
@@ -312,34 +312,58 @@ async function autoLogin(userId, chatId, silent = false) {
     }
 }
 
-setInterval(async () => {
-    console.log("[AUTO-LOGIN] Initiating periodic login check for all users...");
-    for (const userId in userCreds) {
-        if (userCreds[userId].phone && userCreds[userId].pass) {
-            let loginSuccess = false;
-            let retries = 0;
-            const maxRetries = 10; // Allow a few retries for periodic login
+async function loginWithRetry(userId, chatId) {
+    if (!chatId) return; // chatId இல்லனா மெசேஜ் அனுப்ப முடியாது
+    
+    let attempts = 0;
+    const maxAttempts = 10;
+    let success = false;
 
-            while (!loginSuccess && retries < maxRetries) {
-                console.log(`[AUTO-LOGIN] Attempting login for user ${userId} (Retry: ${retries + 1}/${maxRetries})...`);
-                loginSuccess = await autoLogin(userId, null, true); // Silent login, no chat ID needed for periodic check
-                if (!loginSuccess) {
-                    retries++;
-                    console.log(`[AUTO-LOGIN] Login failed for user ${userId}. Retrying in 10 seconds...`);
-                    await sleep(10000); // Wait 10 seconds before retrying
-                }
-            }
+    await send(chatId, `🔄 Login process started for ID: ${userId}...`);
 
-            if (loginSuccess) {
-  console.log("✅ [SUCCESS] Token captured successfully!");
-            if (!silent && chatId) await send(chatId, "✅ Auto Login Success!");            } else {
-                console.error(`[AUTO-LOGIN] Failed to log in user ${userId} after ${maxRetries} attempts.`);
-                // Optionally, notify the user via Telegram if login consistently fails
-                // await send(userId, "⚠️ Auto-login failed. Please check your credentials.");
-            }
+    while (attempts < maxAttempts) {
+        attempts++;
+        console.log(`🔄 Attempt ${attempts} of ${maxAttempts} for user: ${userId}`);
+        
+        // autoLogin-ல ஏற்கனவே மெசேஜ் அனுப்புற மாதிரி இருந்தா அதை சரி பார்த்துக்கோங்க
+        success = await autoLogin(userId, chatId, true); // true கொடுத்தா ஆட்டோமேட்டிக்கா மெசேஜ் அனுப்பும்
+        
+        if (success) {
+            await send(chatId, `✅ Login Successful on attempt ${attempts}!`);
+            return true;
+        }
+        
+        // ஒவ்வொரு தோல்விக்கும் பாட்டுக்கு மெசேஜ் அனுப்பும்
+        await send(chatId, `⚠️ Attempt ${attempts} failed. Retrying...`);
+        
+        if (attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 10000)); // 10 வினாடி காத்திருப்பு
         }
     }
-}, 15 * 60 * 1000); 
+
+    // 10 அட்டெம்ப் முடிஞ்சும் லாகின் ஆகலனா
+    await send(chatId, `❌ Failed to login after ${maxAttempts} attempts! Please check credentials.`);
+    return false;
+}
+
+// 15 நிமிடத்திற்கு ஒருமுறை
+setInterval(async () => {
+    const userIds = Object.keys(userCreds);
+    console.log(`🕒 Starting scheduled login check for all users...`);
+
+    for (const userId of userIds) {
+        const chatId = userCreds[userId]?.chatId;
+        
+        // லாகின் செக் பண்ண ஆரம்பிக்கிறோம்னு யூசருக்கு ஒரு மெசேஜ் போகும்
+        if (chatId) {
+            await send(chatId, `🕒 Scheduled login check started for user: ${userId}...`);
+        }
+
+        // இப்போ லாகின் ட்ரை பண்ணும்
+        await loginWithRetry(userId, chatId);
+    }
+}, 15 * 60 * 1000);
+
 // ============================================================
 //  PLACE BET (Modified to capture token from response if available)
 // ============================================================
@@ -585,53 +609,48 @@ function updateAfterResult(userId, wasWin, currentResult) {
     initState(userId);
     const state = userStates[userId];
 
-if (currentResult === 0) {
+    if (currentResult === 0) {
         state.history = [];
         state.mode = "NORMAL";
-        return; 
+        return;
     }
 
-    // எக்ஸ்ட்ரா வேரியபிள்ஸ் இல்லைனா செட் பண்ணிக்கிறோம்
     if (!state.history) state.history = [];
     if (state.recoveryCount === undefined) state.recoveryCount = 0;
 
+    // 1. RECOVERY மோடு லாஜிக்
     if (state.mode === "RECOVERY") {
+        // வெற்றி கிடைத்தால் உடனே NORMAL மோடுக்கு மாறவும்
         if (wasWin) {
-            // If a bet wins in RECOVERY mode, immediately switch back to NORMAL
             state.mode = "NORMAL";
-            state.history = [];  // Reset history
             state.recoveryCount = 0;
-            console.log(`[RECOVERY MODE] User ${userId} won, switching to NORMAL mode.`);
-        } else {
-            state.recoveryCount -= 1; // Decrement count on loss in recovery
-            // If recoveryCount drops to 0 or less, switch to NORMAL mode
-            if (state.recoveryCount <= 0) {
-                state.mode = "NORMAL";
-                state.history = [];  // Reset history
-                state.recoveryCount = 0;
-                console.log(`[RECOVERY MODE] User ${userId} recovery attempts exhausted, switching to NORMAL mode.`);
-            }
+            state.history = []; // பிரஷ்ஷா ஆரம்பிக்கலாம்
+            return;
         }
-        // RECOVERY மோடுல நடக்குற கேம் ரிசல்ட்ஸ் பழைய நார்மல் பேட்டர்னை பாதிக்கக் கூடாது என்பதால் return செய்கிறோம்
-        return; 
+
+        // தோல்வி அடைந்தால் கவுண்ட்டை குறைக்கிறோம்
+        state.recoveryCount -= 1;
+
+        if (state.recoveryCount <= 0) {
+            state.mode = "NORMAL";
+            state.history = [];
+            state.recoveryCount = 0;
+        }
+        return;
     }
 
-    // 2. NORMAL மோடு ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
+    // 2. NORMAL மோடு ஹிஸ்ட்ரி
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
     const histStr = state.history.join(',');
 
-    // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (4 அல்லது அதற்கு மேற்பட்ட தொடர் நஷ்டங்கள்)
-    // எ.கா: L,L,L,L அல்லது W,L,L,L,L
-    if (/(W,L,L,L,L,L+)$/.test(histStr)) {
+    // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (5 அல்லது அதற்கு மேற்பட்ட தோல்விகள்)
+    if (/(L,L,L,L,L)$/.test(histStr)) {
         state.mode = "RECOVERY";
-        state.recoveryCount = 5; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
-        state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
-    }
-
-    // எந்த பேட்டர்னும் இல்லைனா நார்மலாவே தொடரும்
-    else {
+        state.recoveryCount = 5; // 5 பிரிடிக்ஷன் வாய்ப்பு
+        state.history = [];
+    } else {
         state.mode = "NORMAL";
     }
 }
@@ -639,16 +658,14 @@ if (currentResult === 0) {
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
+    // இங்கே 5-ஐ காட்டும்படி மாற்றப்பட்டுள்ளது
     return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/5)`;
 }
 
 function shouldBet(userId) {
     initState(userId);
     const state = userStates[userId];
-    
-    // Prediction எப்போதும் வரணும், ஆனா patterns ஆக்டிவ் ஆகும் போது மட்டும் (RECOVERY) பெட் பண்ணனும்
     return state.mode === 'RECOVERY';
-    
 }
 
 function shouldBetNow(userId) {
@@ -810,7 +827,7 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ BET ON  : "+signal.val+"\n"+
 "╚══════════════════════════╝",
-        {reply_markup:{inline_keyboard:[[{text:"💰 GOAOKO PLAY NOW",url:REG_LINK}]]}}
+        {reply_markup:{inline_keyboard:[[{text:"💰 REGISTER OR LOGIN NOW",url:REG_LINK}]]}}
     );
 
     // ✅ Pattern iruntha mattum bet kattum
@@ -974,7 +991,7 @@ function addHandlers(){
         else send(msg.chat.id,res.msg);
     });
 
-    bot.onText(/\/setcreds (.+)/,async (msg,match)=>{
+    bot.onText(/\/setcreds (.+)/,(msg,match)=>{
         const id=msg.from.id;
         if(!hasAccess(id))return send(id,"❌ No access.");
         const parts=match[1].trim().split(/\s+/);
@@ -982,28 +999,8 @@ function addHandlers(){
         const phone=parts[0],pass=parts.slice(1).join(" ");
         if(!userCreds[id])userCreds[id]={};
         userCreds[id].phone=phone;userCreds[id].pass=pass;
-        await send(id,"✅ Saved!\n📱 "+phone+"\n🔄 Testing login...");
-        
-        let loginSuccess = false;
-        let retries = 0;
-        const maxRetries = 5; // Allow more retries for initial setcreds login
-
-        while (!loginSuccess && retries < maxRetries) {
-            console.log(`[SETCREDS] Attempting login for user ${id} (Retry: ${retries + 1}/${maxRetries})...`);
-            loginSuccess = await autoLogin(id, msg.chat.id, false); // Not silent, send messages to user
-            if (!loginSuccess) {
-                retries++;
-                if (retries < maxRetries) {
-                    await send(id, `❌ Login failed. Retrying in 5 seconds... (${retries}/${maxRetries})`);
-                    await sleep(5000); // Wait 5 seconds before retrying
-                } else {
-                    await send(id, "❌ Login failed after multiple attempts. Please check your credentials and try again.");
-                }
-            }
-        }
-        if (loginSuccess) {
-            await send(id, "✅ Login successful with new credentials!");
-        }
+        send(id,"✅ Saved!\n📱 "+phone+"\n🔄 Testing login...");
+        autoLogin(id,msg.chat.id,false);
     });
 
     bot.onText(/\/setmytoken (.+)/,(msg,match)=>{
