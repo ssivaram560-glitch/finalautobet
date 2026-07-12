@@ -31,7 +31,7 @@ const PORT = process.env.PORT || 5000;
 http.createServer((req, res) => {
     res.writeHead(200);
     res.end('SIVA BOT OK');
-}).listen(PORT, () => console.log(`✅ohh Keep-alive server on port ${PORT}`));
+}).listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
 
 // Self-ping every 14 minutes to prevent sleep
 const RENDER_URL = process.env.RENDER_URL || "";
@@ -61,7 +61,8 @@ let autobetCfg     = {};
 let autobetState   = {};
 let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
-let userTokens = {}; // Assuming userTokens is managed externally
+let userTokens     = {}; 
+let userStates     = {};
 
 // ============================================================
 //  HELPERS
