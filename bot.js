@@ -218,10 +218,19 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
-    const browser = await puppeteer.launch({
-        headless: true, 
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
-    });
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', // இது மெமரி பிரச்சனைக்கு ரொம்ப முக்கியம்
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process', // Render-ல் இதை மட்டும் கவனி, சில நேரம் இது எரர் கொடுக்கும்
+        '--disable-gpu'
+    ]
+});
 
     try {
         const page = await browser.newPage();
@@ -239,8 +248,7 @@ async function autoLogin(userId, chatId, silent = false) {
         });
 
         // 1. லாகின் பக்கம் - load condition changed for speed
-        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        
+await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });        
         // Wait for inputs to appear
         await page.waitForSelector('input', { timeout: 30000 });
         const inputs = await page.$$('input');
@@ -260,7 +268,7 @@ async function autoLogin(userId, chatId, silent = false) {
 
         // 2. லாகின் முடிந்து ஹோம் பேஜ் வர வரை காத்திரு
         try {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
+await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
         } catch (e) {
             console.log("Navigation timeout, but checking if we are logged in...");
         }
