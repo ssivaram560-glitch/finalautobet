@@ -11,7 +11,7 @@ const BOT_TOKEN    = "8692459169:AAFW_sv72xScUpn0xFsaPTCuzJpNLO0EIBU";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@OnlineEarningapp_bot";
-const REG_LINK     = "https://www.goaoko.com/#/register?invitationCode=457367799017";
+const REG_LINK     = "https://bdgwinuk.com/#/register?invitationCode=6435414007795";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
@@ -316,7 +316,7 @@ async function autoLogin(userId, chatId, silent = false) {
 async function robustLogin(userId, chatId, silent = false) {
     let success = false;
     let attempts = 0;
-    const maxAttempts = 5;
+    const maxAttempts = 10;
     
     while (!success && attempts < maxAttempts) {
         attempts++;
@@ -593,7 +593,10 @@ function getStatus(userId) {
 function shouldBet(userId) {
     initState(userId);
     const state = userStates[userId];
+    
+    // Prediction எப்போதும் வரணும், ஆனா patterns ஆக்டிவ் ஆகும் போது மட்டும் (RECOVERY) பெட் பண்ணனும்
     return state.mode === 'RECOVERY';
+    
 }
 
 function shouldBetNow(userId) {
@@ -602,7 +605,6 @@ function shouldBetNow(userId) {
     if (st.inMart) return true;
     if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) return false;
     return true;
-}
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
@@ -700,6 +702,108 @@ async function runPredict(userId, chatId) {
     const szS=stk(data10,"size"),clS=stk(data10,"color");
     
     const dragonInfo=szS.count>=6?"🐉 SIZE:"+szS.val+" x"+szS.count:clS.count>=6?"🐉 COLOR:"+clS.val+" x"+clS.count:"";
+async function handleWin(userId, chatId, actual, num) {
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
+    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
+    st.level=1;st.inMart=false;st.consecutiveLoss=0;
+    await send(chatId,
+"╔══════════════════════════╗\n"+
+"║  ✅ WIN! 🎉              ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Number : "+num+"\n"+
+"║ Result : "+actual+"\n"+
+"║ Profit : +₹"+profit.toFixed(2)+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"║ Streak : "+pt.winStreak+" wins\n"+
+"║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
+"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
+"╚══════════════════════════╝"
+    );
+    await sendSticker(chatId,WIN_STICKER);
+}
+
+async function handleLoss(userId, chatId, actual, num) {
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+    pt.totalBets++;pt.losses++;pt.pnl-=amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.lossStreak++;pt.winStreak=0;if(pt.lossStreak>pt.maxL)pt.maxL=pt.lossStreak;
+    if(st.level<cfg.maxLvl){
+        st.level++;st.inMart=true;
+        const next=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+        await send(chatId,
+"╔══════════════════════════╗\n"+
+"║  ❌ LOSS                 ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Number : "+num+"\n"+
+"║ Result : "+actual+"\n"+
+"║ Loss   : -₹"+amt+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"╠══════════════════════════╣\n"+
+"║ Next L"+st.level+" : ₹"+next+"\n"+
+"╚══════════════════════════╝"
+        );
+        await sendSticker(chatId,LOSS_STICKER);
+    } else {
+        st.level=1;st.inMart=false;st.consecutiveLoss=0;
+        await send(chatId,
+"╔══════════════════════════╗\n"+
+"║  💀 MAX LEVEL LOSS       ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Loss   : -₹"+amt+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
+"╚══════════════════════════╝"
+        );
+        await sendSticker(chatId,LOSS_STICKER);
+    }
+}
+// ============================================================
+//  PREDICT LOOP
+// ============================================================
+function parseItem(item) {
+    const n = +(item.number || item.winNumber || 0);
+
+    return {
+        n,
+        size: n >= 5 ? "BIG" : "SMALL",
+        color:
+            n === 0 ? "RED" :
+            n === 5 ? "GREEN" :
+            n % 2 === 0 ? "RED" : "GREEN"
+    };
+}
+function stk(arr, key) {
+    let count = 1;
+    let val = arr[0]?.[key];
+
+    for (let i = 1; i < arr.length; i++) {
+        if (arr[i][key] === val) count++;
+        else break;
+    }
+
+    return { val, count };
+}
+async function runPredict(userId, chatId) {
+    if(!running[userId])return;
+
+    const list = await fetchList();
+    if(!list){
+        await send(chatId,"⚠️ API error — retrying in 15s...");
+        return setTimeout(()=>runPredict(userId,chatId), 15000);
+    }
+
+    const next   = (BigInt(list[0].issueNumber)+1n).toString();
+    const signal = decidePrediction(
+        list,
+        autobetState[userId].level,
+        userId
+    );
+    const data10=list.slice(0,10).map(parseItem);
+    const szS=stk(data10,"size"),clS=stk(data10,"color");
+    
+    const dragonInfo=szS.count>=6?"🐉 SIZE:"+szS.val+" x"+szS.count:clS.count>=6?"🐉 COLOR:"+clS.val+" x"+clS.count:"";
 
     if(!signal){
         const sk="SK_"+next;
@@ -752,22 +856,25 @@ async function runPredict(userId, chatId) {
         {reply_markup:{inline_keyboard:[[{text:"💰 GOAOKO PLAY NOW",url:REG_LINK}]]}}
     );
 
+    // ✅ Pattern iruntha mattum bet kattum
     if (cfg.enabled && shouldBet(userId)) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
         }
+    } else if (cfg.enabled) {
+        console.log("👀 No pattern, skipping bet.");
     }
 
     checkResult(userId, chatId, next, signal.val, signal.type);
 }
-
 // ============================================================
 //  RESULT CHECKER
 // ============================================================
 async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId];
+    // ✅ Bet kattiruntha mattum wasReal true aagum
     const wasReal=cfg.enabled && shouldBet(userId);
     
     const iv=setInterval(async()=>{
@@ -789,7 +896,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
         const win = predicted === actual;
 
-        updateAfterResult(userId, win, num); // Added num
+        updateAfterResult(userId, win);
 
         const s = stats[userId];
         s.total++;
@@ -797,12 +904,15 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else{s.loss++;s.lossStreak++;s.winStreak=0;if(s.lossStreak>s.maxLossStreak)s.maxLossStreak=s.lossStreak;}
 
         if(cfg.enabled && wasReal){
+            // ✅ Bet kattiruntha mattum handleWin/handleLoss (Level change aagum)
             if(win) await handleWin(userId,chatId,actual,num);
             else    await handleLoss(userId,chatId,actual,num);
         } else if (cfg.enabled && !wasReal) {
+            // ✅ Bet kattala-na level change aagaathu
             if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
             else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
         } else {
+            // Manual mode
             if(win){
                 await send(chatId,"✅ WIN! #"+num+" "+actual+"\n🔥 "+s.winStreak+" streak");
                 await sendSticker(chatId,WIN_STICKER);
@@ -813,7 +923,6 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         }
         setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},8000);
     },10000);
-}
 
 // ============================================================
 //  STATS & PROFIT
@@ -933,7 +1042,7 @@ function addHandlers(){
         const id=msg.from.id;
         if(!hasAccess(id))return send(id,"❌ No access.");
         const parts=match[1].trim().split(/\s+/);
-        if(parts.length<2)return send(id,"❌ Format:\n/setcreds FULLPHONE PASSWORD\n\nExample:\n/setcreds 916381605525 mypassword");
+        if(parts.length<2)return send(id,"❌ Format:\n/setcreds FULLPHONE PASSWORD\n\nExample:\n/setcreds 6381605535 mypassword");
         const phone=parts[0],pass=parts.slice(1).join(" ");
         if(!userCreds[id])userCreds[id]={};
         userCreds[id].phone=phone;userCreds[id].pass=pass;
