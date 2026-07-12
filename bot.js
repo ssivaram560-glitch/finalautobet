@@ -66,8 +66,33 @@ let GLOBAL_TOKEN   = "";
 // ============================================================
 //  HELPERS
 // ============================================================
+async function fetchList() {
+    // Placeholder for fetchList function
+    // This should ideally fetch data from DRAW_URL
+    try {
+        const response = await axios.get(DRAW_URL, {
+            headers: {
+                "Accept": "application/json, text/plain, */*",
+                "Origin": "https://bdgwin901.com",
+                "Referer": "https://bdgwin901.com/",
+                "Ar-Origin": "https://bdgwin901.com",
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+            },
+            timeout: 10000
+        });
+        if (response.data && response.data.data && response.data.data.list) {
+            return response.data.data.list;
+        }
+        return [];
+    } catch (error) {
+        console.error("[FETCH LIST ERROR]", error.message);
+        return null;
+    }
+}
+
 function initUser(id) {
     if (!stats[id])        stats[id]        = { total:0,win:0,loss:0,lossStreak:0,winStreak:0,maxWinStreak:0,maxLossStreak:0 };
+    if (!userStates[id])   userStates[id]   = { history:[], mode:"NORMAL", recoveryCount:0 };
     if (!sentPeriods[id])  sentPeriods[id]  = new Set();
     if (!autobetCfg[id])   autobetCfg[id]   = { watch:false, watchLoss:5, baseBet:1, maxLvl:5, enabled:false, customBets:[1,3,9,27,81] };
     if (!autobetState[id]) autobetState[id] = { level:1, consecutiveLoss:0, inMart:false };
@@ -159,7 +184,7 @@ async function fetchCaptcha() {
                 "Accept": "application/json, text/plain, */*",
                 "Origin": "https://bdgwin8.vip",
                 "Referer": "https://bdgwin8.vip",
-                "Ar-Origin": "https://bdgwin8.vip",
+                "Ar-Origin": "https://bdgwin901.com",
                 "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
             },
             timeout: 10000
@@ -195,8 +220,7 @@ async function autoLogin(userId, chatId, silent = false) {
 
     const browser = await puppeteer.launch({
         headless: true, 
-        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
     });
 
     try {
@@ -320,9 +344,9 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
                 "authorization":    "Bearer "+token,
                 "content-type":     "application/json",
                 "Accept":           "application/json, text/plain, */*",
-                "Origin":           "https://bdgwin8.vip",
-                "Referer":          "https://bdgwin8.vip/",
-                "Ar-Origin":        "https://bdgwin8.vip",
+                "Origin":           "https://bdgwin901.com",
+                "Referer":          "https://bdgwin901.com/",
+                "Ar-Origin":        "https://bdgwin901.com",
                 "Sec-Ch-Ua":        '"Chromium";v="139"',
                 "Sec-Ch-Ua-Mobile": "?1",
                 "Sec-Fetch-Dest":   "empty",
