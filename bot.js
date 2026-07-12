@@ -316,7 +316,7 @@ async function autoLogin(userId, chatId, silent = false) {
 async function robustLogin(userId, chatId, silent = false) {
     let success = false;
     let attempts = 0;
-    const maxAttempts = 5;
+    const maxAttempts = 10;
     
     while (!success && attempts < maxAttempts) {
         attempts++;
