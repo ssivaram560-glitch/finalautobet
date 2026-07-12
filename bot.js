@@ -31,7 +31,7 @@ const PORT = process.env.PORT || 5000;
 http.createServer((req, res) => {
     res.writeHead(200);
     res.end('SIVA BOT OK');
-}).listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
+}).listen(PORT, () => console.log(`✅ohh Keep-alive server on port ${PORT}`));
 
 // Self-ping every 14 minutes to prevent sleep
 const RENDER_URL = process.env.RENDER_URL || "";
@@ -61,7 +61,7 @@ let autobetCfg     = {};
 let autobetState   = {};
 let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
-
+let userTokens = {}; // Assuming userTokens is managed externally
 
 // ============================================================
 //  HELPERS
@@ -74,7 +74,7 @@ async function fetchList() {
             headers: {
                 "Accept": "application/json, text/plain, */*",
                 "Origin": "https://bdgwin901.com",
-                "Referer": "https://bdgwin901.com/",
+                "Referer": "https://bdgwin901.com",
                 "Ar-Origin": "https://bdgwin901.com",
                 "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
             },
@@ -203,7 +203,6 @@ async function fetchCaptcha() {
 //  AUTO LOGIN (PUPPETEER VERSION)
 // ============================================================
 let loginLock = {};
-let userTokens = {}; // Assuming userTokens is managed externally
 
 // autoLogin function (as provided previously, with chromePath adjusted for Windows if needed)
 async function autoLogin(userId, chatId, silent = false) {
@@ -311,29 +310,39 @@ async function autoLogin(userId, chatId, silent = false) {
         loginLock[userId] = false;
     }
 }
+
 // ============================================================
-//  ROBUST LOGIN WITH RETRY
+//  PERIODIC AUTO-LOGIN (NEW FEATURE)
 // ============================================================
-async function robustLogin(userId, chatId, silent = false) {
-    let success = false;
-    let attempts = 0;
-    const maxAttempts = 15;
-    
-    while (!success && attempts < maxAttempts) {
-        attempts++;
-        if (!silent && chatId) await send(chatId, `🔄 Login Attempt ${attempts}...`);
-        success = await autoLogin(userId, chatId, silent);
-        if (!success && attempts < maxAttempts) {
-            console.log(`[RETRY LOGIN] User: ${userId}, Attempt: ${attempts}`);
-            await new Promise(r => setTimeout(r, 10000)); // Wait 10s
+setInterval(async () => {
+    console.log("[AUTO-LOGIN] Initiating periodic login check for all users...");
+    for (const userId in userCreds) {
+        if (userCreds[userId].phone && userCreds[userId].pass) {
+            let loginSuccess = false;
+            let retries = 0;
+            const maxRetries = 3; // Allow a few retries for periodic login
+
+            while (!loginSuccess && retries < maxRetries) {
+                console.log(`[AUTO-LOGIN] Attempting login for user ${userId} (Retry: ${retries + 1}/${maxRetries})...`);
+                loginSuccess = await autoLogin(userId, null, true); // Silent login, no chat ID needed for periodic check
+                if (!loginSuccess) {
+                    retries++;
+                    console.log(`[AUTO-LOGIN] Login failed for user ${userId}. Retrying in 10 seconds...`);
+                    await sleep(10000); // Wait 10 seconds before retrying
+                }
+            }
+
+            if (loginSuccess) {
+                console.log(`[AUTO-LOGIN] User ${userId} successfully logged in.`);
+            } else {
+                console.error(`[AUTO-LOGIN] Failed to log in user ${userId} after ${maxRetries} attempts.`);
+                // Optionally, notify the user via Telegram if login consistently fails
+                // await send(userId, "⚠️ Auto-login failed. Please check your credentials.");
+            }
         }
     }
-    
-    if (!success && !silent && chatId) {
-        await send(chatId, "❌ Multiple login attempts failed. Please check credentials.");
-    }
-    return success;
-}
+}, 15 * 60 * 1000); // Every 15 minutes
+
 // ============================================================
 //  PLACE BET (Modified to capture token from response if available)
 // ============================================================
@@ -369,179 +378,74 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         gameCode:    "WinGo_30S", 
         issueNumber: String(period),
         language:    "en",
-        random:      Math.floor(Math.random()*1e12)
+        random:      Math.floor(Math.random() * 1000000000000000).toString(),
+        signature:   "",
+        timestamp:   Date.now(),
+        token:       token,
+        track:       0,
+        type:        1,
+        userId:      userId
     };
-    const signature = makeBetSign(params);
-    const timestamp = Math.floor(Date.now()/1000);
-    const payload   = {...params, signature, timestamp};
-
-    console.log(`[BET] ${bc} ₹${betMult} L${level} for Period: ${period}`);
+    params.signature = makeBetSign(params);
 
     for (let i = 0; i < maxRetries; i++) {
         try {
-        const r = await axios.post(BET_URL, payload, {
-            headers: {
-                "authorization":    "Bearer "+token,
-                "content-type":     "application/json",
-                "Accept":           "application/json, text/plain, */*",
-                "Origin":           "https://bdgwin901.com",
-                "Referer":          "https://bdgwin901.com/",
-                "Ar-Origin":        "https://bdgwin901.com",
-                "Sec-Ch-Ua":        '"Chromium";v="139"',
-                "Sec-Ch-Ua-Mobile": "?1",
-                "Sec-Fetch-Dest":   "empty",
-                "Sec-Fetch-Mode":   "cors",
-                "Sec-Fetch-Site":   "cross-site",
-                "User-Agent":       "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-            },
-            timeout: 10000
-        });
-        const d = r.data;
-        console.log(`[BET RESP] code:${d.code} msg:${d.msg}`);
-
-        // Check for a new token in response headers (e.g., 'Authorization' or 'x-auth-token')
-        // This is less common for every bet, but good to check if the API sends it.
-        const newTokenFromResponseHeader = r.headers['authorization'] || r.headers['x-auth-token'];
-        if (newTokenFromResponseHeader) {
-            const cleanNewToken = newTokenFromResponseHeader.replace(/^Bearer\s+/i, "");
-            if (cleanNewToken !== token) { // Only update if it's a different token
-                userTokens[userId] = cleanNewToken;
-                console.log("[TOKEN UPDATE] New token captured from bet response headers!");
-            }
-        }
-
-        // Also check if the token is in the response body (less likely for auth tokens, but possible)
-        if (d.data && d.data.token && d.data.token !== token) {
-             userTokens[userId] = d.data.token;
-             console.log("[TOKEN UPDATE] New token captured from bet response body!");
-        }
-
-        if (d.code===0||d.msg==="Succeed"||d.msgCode===0) return {ok:true, amt:betMult, bc};
-
-       const retryableErrors = ["param is invalid", "the issue number does not exist", "period current settled"];
-if (d.msg && retryableErrors.some(errStr => d.msg.toLowerCase().includes(errStr))) {
-    console.log(`[BET RETRY] Retryable error: ${d.msg}. Retrying in ${retryDelayMs / 1000}s... (Attempt ${i + 1}/${maxRetries})`);
-    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-    continue; // Retry
-}
-
-        if (d.code===401||d.code===40100||(d.msg&&(d.msg.toLowerCase().includes("token")||d.msg.toLowerCase().includes("expired")))) {
-            userTokens[userId]="";
-            await send(chatId,"🔄 Token expired — Re-login...");
-            const ok = await autoLogin(userId,chatId,true);
-            if(ok) await send(chatId,"✅ Re-login OK!");
-            else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
-            return false;
-        }
-
-        await send(chatId,"❌ Bet fail: "+(d.msg||JSON.stringify(d).substr(0,60)));
-        return false;
-    } catch(err) {
-        // Network errors or other exceptions during the request
-        console.error("[BET ERR]",err.message);
-        // If it's a network error, we might want to retry as well, but only if it's not a token error.
-        // For now, let's assume network errors are not retryable in the same way as specific API messages.
-        // If the error is token related, handle it as before.
-        if (err.response && (err.response.status === 401 || (err.response.data && (err.response.data.msg && (err.response.data.msg.toLowerCase().includes("token") || err.response.data.msg.toLowerCase().includes("expired")))))) {
-            userTokens[userId]="";
-            await send(chatId,"🔄 Token error during bet — Re-login...");
-            const ok = await autoLogin(userId,chatId,true);
-            if(ok) await send(chatId,"✅ Re-login OK!");
-            else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
-            return false;
-        }
-        // If it's not a token error, and it's a network error, we can consider retrying here too.
-        // For now, we'll just log and exit if it's a general network error after max retries.
-        await send(chatId,"❌ Network error during bet: "+err.message);
-        return false;
-    }
-}
-// If all retries fail, return false
-return false;
-}
-
-
-// ============================================================
-//  FETCH HISTORY — Multiple fallback URLs for reliability
-// ============================================================
-const DRAW_URLS = [
-    "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json",
-    "https://api.ar-lottery01.com/api/Lottery/WinGoHistory?gameCode=WinGo_30S&pageNo=1&pageSize=20"
-];
-
-function decodeBuffer(buf) {
-    try{return JSON.parse(buf.toString("utf8"));}catch(e){}
-    try{return JSON.parse(zlib.gunzipSync(buf).toString("utf8"));}catch(e){}
-    try{return JSON.parse(zlib.inflateSync(buf).toString("utf8"));}catch(e){}
-    try{return JSON.parse(zlib.inflateRawSync(buf).toString("utf8"));}catch(e){}
-    try{return JSON.parse(buf.toString("utf8"));}catch(e){}
-    return null;
-}
-
-async function fetchList() {
-    for (const url of DRAW_URLS) {
-        try {
-            const r = await axios.get(url, {
-                responseType: 'arraybuffer',
+            const response = await axios.post(BET_URL, params, {
                 headers: {
                     "Accept": "application/json, text/plain, */*",
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                    "Origin": "https://bdgwin901.com",
+                    "Referer": "https://bdgwin901.com/",
+                    "Ar-Origin": "https://bdgwin901.com",
                     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
                 },
-                timeout: 8000
+                timeout: 10000
             });
-            const data = decodeBuffer(r.data);
-            if (data?.data?.list) return data.data.list;
-            if (data?.data) return data.data; // fallback for some api versions
-        } catch(e) {
-            console.error(`[FETCH ERR] ${url.substr(0,30)}... ${e.message}`);
+
+            if (response.data && response.data.code === 0) {
+                console.log("✅ [BET SUCCESS]", response.data);
+                return { ok: true, bc, amt: betMult };
+            } else {
+                console.error("❌ [BET ERROR]", response.data);
+                if (response.data?.code === 100001) { // Token invalid or expired
+                    console.log("[BET] Token expired, attempting re-login...");
+                    const reLoggedIn = await autoLogin(userId, chatId, true);
+                    if (reLoggedIn) {
+                        token = getToken(userId); // Update token after successful re-login
+                        params.token = token;
+                        params.signature = makeBetSign(params); // Re-sign with new token
+                        continue; // Retry bet with new token
+                    } else {
+                        await send(chatId, "❌ Login failed after token expiry. Please /setcreds again.");
+                        return { ok: false, msg: "Login failed after token expiry." };
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("[BET AXIOS ERROR]", error.message);
         }
+        await sleep(retryDelayMs); // Wait before retrying
     }
-    return null;
+    await send(chatId, "❌ Bet failed after multiple retries.");
+    return { ok: false, msg: "Bet failed after multiple retries." };
 }
 
-// ============================================================
-//  PREDICTION LOGIC (SIVA AI CORE)
-// ============================================================
-let userStates = {};
-
 function initState(userId) {
-    if (!userStates[userId]) {
-   userStates[userId] = {
-    mode: "NORMAL",
-    recoveryCount: 0,
-    winBeforeLoss: 0,
-    lossStreak: 0
-};
-    }
+    if (!userStates[userId]) userStates[userId] = { history:[], mode:"NORMAL", recoveryCount:0 };
 }
 
 function decidePrediction(list, currentLevel, userId) {
-    
-    if (!list || list.length < 2) {
-        return null;
-    }
-
     initState(userId);
     const state = userStates[userId];
 
-    // ═════════════════════════════════════════════════════════════════════
-    //  L3+: FORCED WIN
-    // ═════════════════════════════════════════════════════════════════════
+    // Previous result 0னா prediction வேண்டாம்
+    if (list[0].number === 0 || list[0].winNumber === 0) {
+        return null;
+    }
     
-
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L1-L2: NORMAL OR RECOVERY MODE
-    // ═════════════════════════════════════════════════════════════════════
-
     const currentPeriod = String(list[0].issueNumber);
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
-
-
-// Previous result 0னா prediction வேண்டாம்
-if (currentResult === 0) {
-    return null;
-}
 
     // STEP 1: Calculate next period
     const nextPeriodNum = BigInt(currentPeriod) + 1n;
@@ -579,7 +483,7 @@ function updateAfterResult(userId, wasWin, currentResult) {
     initState(userId);
     const state = userStates[userId];
 
-if (currentResult === 0) {
+    if (currentResult === 0) {
         state.history = [];
         state.mode = "NORMAL";
         return; 
@@ -589,23 +493,25 @@ if (currentResult === 0) {
     if (!state.history) state.history = [];
     if (state.recoveryCount === undefined) state.recoveryCount = 0;
 
-        // RECOVERY Mode Logic
+    // 1. ஏற்கனவே RECOVERY மோடு ஆக்டிவ் ஆக இருந்தால்
     if (state.mode === "RECOVERY") {
-        // Feature: Any 1 win closes recovery mode
         if (wasWin) {
+            // If a bet wins in RECOVERY mode, immediately switch back to NORMAL
             state.mode = "NORMAL";
-            state.history = [];
+            state.history = [];  // Reset history
             state.recoveryCount = 0;
-            console.log(`[RECOVERY EXIT] User: ${userId} won, returning to NORMAL mode.`);
-            return;
+            console.log(`[RECOVERY MODE] User ${userId} won, switching to NORMAL mode.`);
+        } else {
+            state.recoveryCount -= 1; // Decrement count on loss in recovery
+            // If recoveryCount drops to 0 or less, switch to NORMAL mode
+            if (state.recoveryCount <= 0) {
+                state.mode = "NORMAL";
+                state.history = [];  // Reset history
+                state.recoveryCount = 0;
+                console.log(`[RECOVERY MODE] User ${userId} recovery attempts exhausted, switching to NORMAL mode.`);
+            }
         }
-
-        state.recoveryCount -= 1; 
-        if (state.recoveryCount <= 0) {
-            state.mode = "NORMAL";
-            state.history = [];  
-            state.recoveryCount = 0;
-        }
+        // RECOVERY மோடுல நடக்குற கேம் ரிசல்ட்ஸ் பழைய நார்மல் பேட்டர்னை பாதிக்கக் கூடாது என்பதால் return செய்கிறோம்
         return; 
     }
 
@@ -617,10 +523,11 @@ if (currentResult === 0) {
 
     // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (4 அல்லது அதற்கு மேற்பட்ட தொடர் நஷ்டங்கள்)
     // எ.கா: L,L,L,L அல்லது W,L,L,L,L
-    if (/(W,L,L,L,L,L+)$/.test(histStr)) {
+    if (/(W,L,L,L,L,L+)$/.test(histStr)) { // This regex matches 5 or more consecutive losses (L,L,L,L,L or W,L,L,L,L,L)
         state.mode = "RECOVERY";
-        state.recoveryCount = 5; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
+        state.recoveryCount = 5; // Changed from 3 to 5 recovery predictions
         state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
+        console.log(`[NORMAL MODE] User ${userId} entered RECOVERY mode with 5 attempts.`);
     }
 
     // எந்த பேட்டர்னும் இல்லைனா நார்மலாவே தொடரும்
@@ -632,7 +539,7 @@ if (currentResult === 0) {
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/5)`;
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/5)`; // Updated display for 5 levels
 }
 
 function shouldBet(userId) {
@@ -762,7 +669,6 @@ async function runPredict(userId, chatId) {
             await send(chatId,
 "╔══════════════════════════╗\n"+
 "║   ⏭️ SKIP                ║\n"+
-"╠══════════════════════════╣\n"+
 "║ Period : "+next.slice(-6)+"\n"+
 (dragonInfo?"║ "+dragonInfo+"\n":"")+
 "║ No 90%+ pattern\n"+
@@ -846,7 +752,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
         const win = predicted === actual;
 
-        updateAfterResult(userId, win);
+        updateAfterResult(userId, win, num); // Pass num as currentResult
 
         const s = stats[userId];
         s.total++;
@@ -857,7 +763,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             // ✅ Bet kattiruntha mattum handleWin/handleLoss (Level change aagum)
             if(win) await handleWin(userId,chatId,actual,num);
             else    await handleLoss(userId,chatId,actual,num);
-        } else if (cfg.enabled && !wasReal) {
+        } else if (cfg.enabled) {
             // ✅ Bet kattala-na level change aagaathu
             if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
             else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
@@ -939,36 +845,12 @@ function startBot(){
     bot.on("error",err=>{console.error("Bot:",err.message);});
     addHandlers();
     console.log("✅ SIVA BOT running...");
-    
-    // Start the 15-minute auto-login task
-    startAutoLoginTask();
 }
 async function send(chatId,text,opts={}){
     try{return await bot.sendMessage(chatId,text,opts);}
     catch(e){if(e.message&&e.message.includes("parse entities")){try{const o={...opts};delete o.parse_mode;return await bot.sendMessage(chatId,text,o);}catch(e2){}}console.error("send:",e.message?.substr(0,60));}
 }
 async function sendSticker(chatId,sid){try{await bot.sendSticker(chatId,sid);}catch(e){}}
-
-
-// ============================================================
-//  AUTO LOGIN TASK (Every 15 Minutes)
-// ============================================================
-function startAutoLoginTask() {
-    console.log("🕒 [TASK] Auto-login scheduler started (15 mins)");
-    setInterval(async () => {
-        const userIds = Object.keys(userCreds);
-        console.log(`🕒 [TASK] Running auto-login for ${userIds.length} users...`);
-        for (const userId of userIds) {
-            const creds = userCreds[userId];
-            if (creds && creds.phone && creds.pass) {
-                console.log(`🕒 [TASK] Auto-logging user: ${userId}`);
-                if (!silent && chatId) await send(chatId, "✅ Auto Login & Token Capture Success!");
-                // Robust login handles retries internally
-                robustLogin(userId, userId, true); 
-            }
-        }
-    }, 15 * 60 * 1000);
-}
 
 // ============================================================
 //  HANDLERS
@@ -991,7 +873,7 @@ function addHandlers(){
         else send(msg.chat.id,res.msg);
     });
 
-    bot.onText(/\/setcreds (.+)/,(msg,match)=>{
+    bot.onText(/\/setcreds (.+)/,async (msg,match)=>{
         const id=msg.from.id;
         if(!hasAccess(id))return send(id,"❌ No access.");
         const parts=match[1].trim().split(/\s+/);
@@ -999,8 +881,28 @@ function addHandlers(){
         const phone=parts[0],pass=parts.slice(1).join(" ");
         if(!userCreds[id])userCreds[id]={};
         userCreds[id].phone=phone;userCreds[id].pass=pass;
-        send(id,"✅ Saved!\n📱 "+phone+"\n🔄 Testing login...");
-        autoLogin(id,msg.chat.id,false);
+        await send(id,"✅ Saved!\n📱 "+phone+"\n🔄 Testing login...");
+        
+        let loginSuccess = false;
+        let retries = 0;
+        const maxRetries = 5; // Allow more retries for initial setcreds login
+
+        while (!loginSuccess && retries < maxRetries) {
+            console.log(`[SETCREDS] Attempting login for user ${id} (Retry: ${retries + 1}/${maxRetries})...`);
+            loginSuccess = await autoLogin(id, msg.chat.id, false); // Not silent, send messages to user
+            if (!loginSuccess) {
+                retries++;
+                if (retries < maxRetries) {
+                    await send(id, `❌ Login failed. Retrying in 5 seconds... (${retries}/${maxRetries})`);
+                    await sleep(5000); // Wait 5 seconds before retrying
+                } else {
+                    await send(id, "❌ Login failed after multiple attempts. Please check your credentials and try again.");
+                }
+            }
+        }
+        if (loginSuccess) {
+            await send(id, "✅ Login successful with new credentials!");
+        }
     });
 
     bot.onText(/\/setmytoken (.+)/,(msg,match)=>{
@@ -1095,6 +997,7 @@ function addHandlers(){
             else if(s.action==="genkey"){const d=parseInt(text);if(isNaN(d)||d<1)return send(id,"❌ Days?");const k=generateKey(d,id);delete adminState[id];return send(id,"🔑 Key:\n\n"+k+"\n\n"+d+"d",{reply_markup:adminMenu});}
             else if(s.action==="adduser"){if(!s.step2){const t=parseInt(text);if(isNaN(t))return send(id,"❌");adminState[id]={action:"adduser",step2:true,tid:t};return send(id,"ID:"+t+"\nDays?");}else{const d=parseInt(text);if(isNaN(d)||d<1)return send(id,"❌");usersAccess[s.tid]=Date.now()+d*86400000;delete adminState[id];send(id,"✅ "+s.tid+" "+d+"d",{reply_markup:adminMenu});send(s.tid,"🎊 ACCESS! "+d+"d");return;}}
             else if(s.action==="removeuser"){const t=parseInt(text);if(isNaN(t))return;const was=hasAccess(t);delete usersAccess[t];running[t]=false;delete adminState[id];send(id,was?"🚫 Removed":"⚠️ Not active",{reply_markup:adminMenu});if(was)send(t,"🔴 Removed.");return;}
+            else if(s.action==="allKeysList")     return send(id,"📋\n\n"+allKeysList());
         }
 
         // --- User Settings Input Handling ---
@@ -1119,7 +1022,7 @@ function addHandlers(){
             }
             else if(s.action === "setwloss"){
                 const v = parseInt(text);
-                if(isNaN(v) || v < 0) return send(id, "❌ Invalid Number!");
+                if(isNaN(v) || v < 0) return send(id, "❌ Invalid Count! Enter 0 or more.");
                 autobetCfg[id].watchLoss = v;
                 delete userAction[id];
                 return send(id, "✅ Watch Loss Updated: " + v + "\n(Bot will wait for " + v + " losses before betting)", {reply_markup: autobetMenu});
