@@ -61,7 +61,7 @@ let autobetCfg     = {};
 let autobetState   = {};
 let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
-
+let userTokens = {}; // Moved here for better scope management
 
 // ============================================================
 //  HELPERS
@@ -204,27 +204,30 @@ async function fetchCaptcha() {
 //  AUTO LOGIN (PUPPETEER VERSION)
 // ============================================================
 let loginLock = {};
-let userTokens = {}; // Assuming userTokens is managed externally
 
 // autoLogin function (as provided previously, with chromePath adjusted for Windows if needed)
 async function autoLogin(userId, chatId, silent = false) {
-    if (loginLock[userId]) return false;
+    if (loginLock[userId]) {
+        console.log(`[AUTO LOGIN] User ${userId} already in login process.`);
+        return false;
+    }
     loginLock[userId] = true;
 
     const creds = userCreds[userId] || {};
     const { phone, pass } = creds;
 
     if (!phone || !pass) {
+        console.log(`[AUTO LOGIN] User ${userId} has no phone or password set.`);
         loginLock[userId] = false;
         return false;
     }
 
-    const browser = await puppeteer.launch({
-        headless: true, 
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
-    });
-
+    let browser;
     try {
+        browser = await puppeteer.launch({
+            headless: true, 
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
+        });
         const page = await browser.newPage();
         // Render RAM optimization
         await page.setDefaultNavigationTimeout(90000); 
@@ -235,6 +238,7 @@ async function autoLogin(userId, chatId, silent = false) {
         page.on('request', (req) => {
             if (req.url().includes('GetBalance') && req.headers()['authorization']) {
                 capturedToken = req.headers()['authorization'].replace(/^Bearer\s+/i, "");
+                console.log(`[TOKEN CAPTURE] Captured token for user ${userId}: ${capturedToken.substring(0, 10)}...`);
             }
             req.continue();
         });
@@ -297,43 +301,35 @@ async function autoLogin(userId, chatId, silent = false) {
 
         if (capturedToken) {
             userTokens[userId] = capturedToken;
-            console.log("✅ [SUCCESS] Token captured successfully!");
+            console.log("✅ [SUCCESS] Token captured successfully for user " + userId + "!");
             if (!silent && chatId) await send(chatId, "✅ Login & Token Capture Success!");
             return true;
         } else {
-            throw new Error("Token not found in requests.");
+            throw new Error("Token not found in requests after login sequence.");
         }
 
     } catch (err) {
-        console.error("❌ Login Error:", err.message);
+        console.error(`❌ Login Error for user ${userId}:`, err.message);
+        if (!silent && chatId) await send(chatId, `❌ Login failed: ${err.message}`);
         return false;
     } finally {
-        await browser.close();
+        if (browser) await browser.close();
         loginLock[userId] = false;
     }
 }
 
 
 // ============================================================
-//  ROBUST LOGIN WITH RETRY
+//  ROBUST LOGIN WITH CONTINUOUS RETRY
 // ============================================================
 async function robustLogin(userId, chatId, silent = false) {
     let success = false;
-    let attempts = 0;
-    const maxAttempts = 5;
-    
-    while (!success && attempts < maxAttempts) {
-        attempts++;
-        if (!silent && chatId) await send(chatId, `🔄 Login Attempt ${attempts}...`);
-        success = await autoLogin(userId, chatId, silent);
-        if (!success && attempts < maxAttempts) {
-            console.log(`[RETRY LOGIN] User: ${userId}, Attempt: ${attempts}`);
-            await new Promise(r => setTimeout(r, 10000)); // Wait 10s
-        }
-    }
+    // This function will attempt login once. The scheduler will handle continuous retries.
+    success = await autoLogin(userId, chatId, silent);
     
     if (!success && !silent && chatId) {
-        await send(chatId, "❌ Multiple login attempts failed. Please check credentials.");
+        // Only send a message if it's not silent and login failed
+        await send(chatId, "❌ Login failed. Will retry automatically.");
     }
     return success;
 }
@@ -341,26 +337,28 @@ async function robustLogin(userId, chatId, silent = false) {
 // ============================================================
 //  PLACE BET (Modified to capture token from response if available)
 // ============================================================
-// ============================================================
-//  IMPROVED PLACE BET FUNCTION (Silent Retries & Multi-Request Fix)
-// ============================================================
 async function placeBet(userId, chatId, period, prediction, predType, level) {
     let token = getToken(userId);
     if (!token || token.length < 20) {
-        console.log("[PLACE BET] Token missing or invalid, attempting autoLogin...");
-        const ok = await autoLogin(userId, chatId, true);
-        if (!ok) { 
-            await send(chatId,"❌ Token இல்லை!\n/setcreds FULLPHONE PASSWORD"); 
+        console.log("[PLACE BET] Token missing or invalid for user " + userId + ", attempting autoLogin...");
+        // Attempt autoLogin. If it fails, the bet cannot be placed now.
+        const loginSuccess = await robustLogin(userId, chatId, true); // Silent login attempt
+        if (!loginSuccess) { 
+            await send(chatId,"❌ Token இல்லை! Auto-login failed. Please check credentials and try again."); 
             return false; 
         }
-        token = getToken(userId);
+        token = getToken(userId); // Get the newly acquired token
+        if (!token || token.length < 20) { // Double check after autoLogin
+            await send(chatId,"❌ Auto-login succeeded but token is still invalid. Please contact support.");
+            return false;
+        }
     }
 
     const cfg     = autobetCfg[userId];
     const betMult = cfg.customBets[level-1] || (cfg.baseBet * MULT[level-1]);
     let bc = "";
 
-    const maxRetries = 3; // Maximum number of retries
+    const maxRetries = 3; // Maximum number of retries for placing the bet itself
     const retryDelayMs = 2000; // 2 seconds delay between retries
 
     if (predType==="SIZE")  bc = prediction==="BIG" ? "BigSmall_Big" : "BigSmall_Small";
@@ -379,128 +377,67 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     const timestamp = Math.floor(Date.now()/1000);
     const payload   = {...params, signature, timestamp};
 
-    console.log(`[BET] ${bc} ₹${betMult} L${level} for Period: ${period}`);
+    console.log(`[BET] ${bc} ₹${betMult} L${level} for Period: ${period} for user ${userId}`);
 
     for (let i = 0; i < maxRetries; i++) {
         try {
-        const r = await axios.post(BET_URL, payload, {
-            headers: {
-                "authorization":    "Bearer "+token,
-                "content-type":     "application/json",
-                "Accept":           "application/json, text/plain, */*",
-                "Origin":           "https://bdgwin901.com",
-                "Referer":          "https://bdgwin901.com/",
-                "Ar-Origin":        "https://bdgwin901.com",
-                "Sec-Ch-Ua":        '"Chromium";v="139"',
-                "Sec-Ch-Ua-Mobile": "?1",
-                "Sec-Fetch-Dest":   "empty",
-                "Sec-Fetch-Mode":   "cors",
-                "Sec-Fetch-Site":   "cross-site",
-                "User-Agent":       "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-            },
-            timeout: 10000
-        });
-        const d = r.data;
-        console.log(`[BET RESP] code:${d.code} msg:${d.msg}`);
+            const r = await axios.post(BET_URL, payload, {
+                headers: {
+                    "authorization":    "Bearer "+token,
+                    "content-type":     "application/json",
+                    "Accept":           "application/json, text/plain, */*",
+                    "Origin":           "https://bdgwin901.com",
+                    "Referer":          "https://bdgwin901.com/",
+                    "Ar-Origin":        "https://bdgwin901.com",
+                    "Sec-Ch-Ua":        '"Chromium";v="139"',
+                    "Sec-Ch-Ua-Mobile": "?1",
+                    "Sec-Fetch-Dest":   "empty",
+                    "Sec-Fetch-Mode":   "cors",
+                    "Sec-Fetch-Site":   "cross-site",
+                    "User-Agent":       "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
+                },
+                timeout: 10000
+            });
 
-        // Check for a new token in response headers (e.g., 'Authorization' or 'x-auth-token')
-        // This is less common for every bet, but good to check if the API sends it.
-        const newTokenFromResponseHeader = r.headers['authorization'] || r.headers['x-auth-token'];
-        if (newTokenFromResponseHeader) {
-            const cleanNewToken = newTokenFromResponseHeader.replace(/^Bearer\s+/i, "");
-            if (cleanNewToken !== token) { // Only update if it's a different token
-                userTokens[userId] = cleanNewToken;
-                console.log("[TOKEN UPDATE] New token captured from bet response headers!");
+            if (r.data && r.data.code === 0) {
+                console.log(`✅ [BET SUCCESS] User ${userId}: ${bc} ₹${betMult}`);
+                return { ok: true, bc, amt: betMult };
+            } else {
+                console.error(`❌ [BET ERROR] User ${userId}: ${r.data?.msg || 'Unknown error'}`);
+                // If token is invalid, attempt re-login and retry bet
+                if (r.data?.msg?.includes("token")) {
+                    console.log(`[BET RETRY] Token invalid for user ${userId}, attempting re-login...`);
+                    const reLoginSuccess = await robustLogin(userId, chatId, true);
+                    if (reLoginSuccess) {
+                        token = getToken(userId); // Update token for next retry
+                        if (i < maxRetries - 1) {
+                            await sleep(retryDelayMs); // Wait before retrying bet
+                            continue; // Retry the bet with new token
+                        }
+                    }
+                }
+                return { ok: false, msg: r.data?.msg || 'Bet failed' };
+            }
+        } catch (e) {
+            console.error(`❌ [BET AXIOS ERROR] User ${userId}:`, e.message);
+            if (e.response?.data?.msg?.includes("token")) {
+                console.log(`[BET RETRY] Token invalid (axios error) for user ${userId}, attempting re-login...`);
+                const reLoginSuccess = await robustLogin(userId, chatId, true);
+                if (reLoginSuccess) {
+                    token = getToken(userId); // Update token for next retry
+                    if (i < maxRetries - 1) {
+                        await sleep(retryDelayMs); // Wait before retrying bet
+                        continue; // Retry the bet with new token
+                    }
+                }
+            }
+            if (i < maxRetries - 1) {
+                await sleep(retryDelayMs); // Wait before retrying
             }
         }
-
-        // Also check if the token is in the response body (less likely for auth tokens, but possible)
-        if (d.data && d.data.token && d.data.token !== token) {
-             userTokens[userId] = d.data.token;
-             console.log("[TOKEN UPDATE] New token captured from bet response body!");
-        }
-
-        if (d.code===0||d.msg==="Succeed"||d.msgCode===0) return {ok:true, amt:betMult, bc};
-
-       const retryableErrors = ["param is invalid", "the issue number does not exist", "period current settled"];
-if (d.msg && retryableErrors.some(errStr => d.msg.toLowerCase().includes(errStr))) {
-    console.log(`[BET RETRY] Retryable error: ${d.msg}. Retrying in ${retryDelayMs / 1000}s... (Attempt ${i + 1}/${maxRetries})`);
-    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-    continue; // Retry
-}
-
-        if (d.code===401||d.code===40100||(d.msg&&(d.msg.toLowerCase().includes("token")||d.msg.toLowerCase().includes("expired")))) {
-            userTokens[userId]="";
-            await send(chatId,"🔄 Token expired — Re-login...");
-            const ok = await autoLogin(userId,chatId,true);
-            if(ok) await send(chatId,"✅ Re-login OK!");
-            else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
-            return false;
-        }
-
-        await send(chatId,"❌ Bet fail: "+(d.msg||JSON.stringify(d).substr(0,60)));
-        return false;
-    } catch(err) {
-        // Network errors or other exceptions during the request
-        console.error("[BET ERR]",err.message);
-        // If it's a network error, we might want to retry as well, but only if it's not a token error.
-        // For now, let's assume network errors are not retryable in the same way as specific API messages.
-        // If the error is token related, handle it as before.
-        if (err.response && (err.response.status === 401 || (err.response.data && (err.response.data.msg && (err.response.data.msg.toLowerCase().includes("token") || err.response.data.msg.toLowerCase().includes("expired")))))) {
-            userTokens[userId]="";
-            await send(chatId,"🔄 Token error during bet — Re-login...");
-            const ok = await autoLogin(userId,chatId,true);
-            if(ok) await send(chatId,"✅ Re-login OK!");
-            else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
-            return false;
-        }
-        // If it's not a token error, and it's a network error, we can consider retrying here too.
-        // For now, we'll just log and exit if it's a general network error after max retries.
-        await send(chatId,"❌ Network error during bet: "+err.message);
-        return false;
     }
-}
-// If all retries fail, return false
-return false;
-}
-
-
-// ============================================================
-//  FETCH HISTORY — Multiple fallback URLs for reliability
-// ============================================================
-const DRAW_URLS = [
-    "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json",
-    "https://api.ar-lottery01.com/api/Lottery/WinGoHistory?gameCode=WinGo_30S&pageNo=1&pageSize=20"
-];
-
-function decodeBuffer(buf) {
-    try{return JSON.parse(buf.toString("utf8"));}catch(e){}
-    try{return JSON.parse(zlib.gunzipSync(buf).toString("utf8"));}catch(e){}
-    try{return JSON.parse(zlib.inflateSync(buf).toString("utf8"));}catch(e){}
-    try{return JSON.parse(zlib.inflateRawSync(buf).toString("utf8"));}catch(e){}
-    try{return JSON.parse(buf.toString("utf8"));}catch(e){}
-    return null;
-}
-
-async function fetchList() {
-    for (const url of DRAW_URLS) {
-        try {
-            const r = await axios.get(url, {
-                responseType: 'arraybuffer',
-                headers: {
-                    "Accept": "application/json, text/plain, */*",
-                    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
-                },
-                timeout: 8000
-            });
-            const data = decodeBuffer(r.data);
-            if (data?.data?.list) return data.data.list;
-            if (data?.data) return data.data; // fallback for some api versions
-        } catch(e) {
-            console.error(`[FETCH ERR] ${url.substr(0,30)}... ${e.message}`);
-        }
-    }
-    return null;
+    console.error(`❌ [BET FAILED] User ${userId}: All ${maxRetries} attempts failed.`);
+    return { ok: false, msg: "Bet failed after multiple retries." };
 }
 
 // ============================================================
@@ -933,7 +870,7 @@ function startBot(){
     bot.on("error",err=>{console.error("Bot:",err.message);});
     addHandlers();
     console.log("✅ SIVA BOT running...");
-        startAutoLoginTask();
+    startAutoLoginTask();
 
 }
 
@@ -953,13 +890,18 @@ function startAutoLoginTask() {
         console.log(`🕒 [TASK] Running auto-login for ${userIds.length} users...`);
         for (const userId of userIds) {
             const creds = userCreds[userId];
-            if (creds && creds.phone && creds.pass) {
+            // Only attempt auto-login if credentials are set and no valid token exists
+            if (creds && creds.phone && creds.pass && (!userTokens[userId] || userTokens[userId].length < 20)) {
                 console.log(`🕒 [TASK] Auto-logging user: ${userId}`);
-                // Robust login handles retries internally
-                robustLogin(userId, userId, true); 
+                // robustLogin now just attempts once, the interval handles retries over time
+                await robustLogin(userId, userId, true); 
+            } else if (creds && creds.phone && creds.pass && userTokens[userId] && userTokens[userId].length >= 20) {
+                console.log(`🕒 [TASK] User ${userId} already has a valid token. Skipping auto-login.`);
+            } else {
+                console.log(`🕒 [TASK] User ${userId} has no credentials or token set. Skipping auto-login.`);
             }
         }
-    }, 15 * 60 * 1000);
+    }, 15 * 60 * 1000); // 15 minutes
 }
 
 // ============================================================
@@ -1107,7 +1049,7 @@ function addHandlers(){
                 autobetCfg[id].maxLvl = v;
                 delete userAction[id];
                 const a = MULT.slice(0, v).map(m => autobetCfg[id].baseBet * m);
-                return send(id, "✅ Max Level Updated: " + v + "\nMartingale: ₹" + a.join("→₹"), {reply_markup: autobetMenu});
+                return send(id, "✅ Max Level Updated: L" + v + "\nMartingale: ₹" + a.join("→₹"), {reply_markup: autobetMenu});
             }
             else if(s.action === "setwloss"){
                 const v = parseInt(text);
