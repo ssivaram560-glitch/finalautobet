@@ -11,7 +11,7 @@ const BOT_TOKEN    = "8692459169:AAFW_sv72xScUpn0xFsaPTCuzJpNLO0EIBU";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@OnlineEarningapp_bot";
-const REG_LINK     = "https://www.goaoko.com/#/register?invitationCode=457367799017";
+const REG_LINK     = "https://bdgwinuu.com/#/register?invitationCode=6435414007795";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
@@ -199,6 +199,7 @@ async function fetchCaptcha() {
     }
 }
 
+
 // ============================================================
 //  AUTO LOGIN (PUPPETEER VERSION)
 // ============================================================
@@ -310,6 +311,31 @@ async function autoLogin(userId, chatId, silent = false) {
         await browser.close();
         loginLock[userId] = false;
     }
+}
+
+
+// ============================================================
+//  ROBUST LOGIN WITH RETRY
+// ============================================================
+async function robustLogin(userId, chatId, silent = false) {
+    let success = false;
+    let attempts = 0;
+    const maxAttempts = 5;
+    
+    while (!success && attempts < maxAttempts) {
+        attempts++;
+        if (!silent && chatId) await send(chatId, `🔄 Login Attempt ${attempts}...`);
+        success = await autoLogin(userId, chatId, silent);
+        if (!success && attempts < maxAttempts) {
+            console.log(`[RETRY LOGIN] User: ${userId}, Attempt: ${attempts}`);
+            await new Promise(r => setTimeout(r, 10000)); // Wait 10s
+        }
+    }
+    
+    if (!success && !silent && chatId) {
+        await send(chatId, "❌ Multiple login attempts failed. Please check credentials.");
+    }
+    return success;
 }
 
 // ============================================================
@@ -598,19 +624,18 @@ function updateAfterResult(userId, wasWin, currentResult) {
         state.mode = "NORMAL";
     }
 }
+
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/1)`;
+    // இங்கே 5-ஐ காட்டும்படி மாற்றப்பட்டுள்ளது
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/5)`;
 }
 
 function shouldBet(userId) {
     initState(userId);
     const state = userStates[userId];
-    
-    // Prediction எப்போதும் வரணும், ஆனா patterns ஆக்டிவ் ஆகும் போது மட்டும் (RECOVERY) பெட் பண்ணனும்
     return state.mode === 'RECOVERY';
-    
 }
 
 function shouldBetNow(userId) {
@@ -772,7 +797,7 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ BET ON  : "+signal.val+"\n"+
 "╚══════════════════════════╝",
-        {reply_markup:{inline_keyboard:[[{text:"💰 GOAOKO PLAY NOW",url:REG_LINK}]]}}
+        {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
     // ✅ Pattern iruntha mattum bet kattum
@@ -908,12 +933,34 @@ function startBot(){
     bot.on("error",err=>{console.error("Bot:",err.message);});
     addHandlers();
     console.log("✅ SIVA BOT running...");
+        startAutoLoginTask();
+
 }
+
 async function send(chatId,text,opts={}){
     try{return await bot.sendMessage(chatId,text,opts);}
     catch(e){if(e.message&&e.message.includes("parse entities")){try{const o={...opts};delete o.parse_mode;return await bot.sendMessage(chatId,text,o);}catch(e2){}}console.error("send:",e.message?.substr(0,60));}
 }
 async function sendSticker(chatId,sid){try{await bot.sendSticker(chatId,sid);}catch(e){}}
+
+// ============================================================
+//  AUTO LOGIN TASK (Every 15 Minutes)
+// ============================================================
+function startAutoLoginTask() {
+    console.log("🕒 [TASK] Auto-login scheduler started (15 mins)");
+    setInterval(async () => {
+        const userIds = Object.keys(userCreds);
+        console.log(`🕒 [TASK] Running auto-login for ${userIds.length} users...`);
+        for (const userId of userIds) {
+            const creds = userCreds[userId];
+            if (creds && creds.phone && creds.pass) {
+                console.log(`🕒 [TASK] Auto-logging user: ${userId}`);
+                // Robust login handles retries internally
+                robustLogin(userId, userId, true); 
+            }
+        }
+    }, 15 * 60 * 1000);
+}
 
 // ============================================================
 //  HANDLERS
