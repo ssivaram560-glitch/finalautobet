@@ -11,7 +11,7 @@ const BOT_TOKEN    = "8692459169:AAFW_sv72xScUpn0xFsaPTCuzJpNLO0EIBU";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@OnlineEarningapp_bot";
-const REG_LINK     = "https://bdgwinuk.com/#/register?invitationCode=6435414007795";
+const REG_LINK     = "https://bdgwin53.com/#/register?invitationCode=6435414007795";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
@@ -316,7 +316,7 @@ async function autoLogin(userId, chatId, silent = false) {
 async function robustLogin(userId, chatId, silent = false) {
     let success = false;
     let attempts = 0;
-    const maxAttempts = 10;
+    const maxAttempts = 15;
     
     while (!success && attempts < maxAttempts) {
         attempts++;
@@ -575,7 +575,7 @@ function updateAfterResult(userId, wasWin, currentResult) {
 
     // Trigger RECOVERY Mode
     // Changed recovery mode to 5 predictions
-    if (/(W,L,L,L,L,L+)$/.test(histStr)) {
+    if (/(L,L,L,L,L+)$/.test(histStr)) { // Trigger recovery after 5 consecutive losses
         state.mode = "RECOVERY";
         state.recoveryCount = 5; // Updated from 3 to 5
         state.history = [];      
@@ -587,7 +587,7 @@ function updateAfterResult(userId, wasWin, currentResult) {
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/1)`;
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/5)`;
 }
 
 function shouldBet(userId) {
@@ -728,23 +728,11 @@ async function runPredict(userId, chatId) {
     const predDisplay=signal.type==="SIZE"?(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL"):(signal.val==="RED"?"🔴 RED":"🟢 GREEN");
 
     let abLine="🤖 AutoBet: OFF";
-    let statusLine = "🔍 Status : WATCHING"; // Default status
-    
     if(cfg.enabled){
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-        
-        // If in Martingale or should bet (Recovery mode)
-        if(shouldBet(userId)) {
-            abLine = "💰 BET: ₹" + curBet + " L" + st.level;
-            statusLine = "✅ Status : PLACING BET";
-        } else {
-            if(cfg.watch && st.consecutiveLoss < cfg.watchLoss) {
-                abLine = "👀 Watch: " + st.consecutiveLoss + "/" + cfg.watchLoss;
-            } else {
-                abLine = "💰 NEXT: ₹" + curBet + " L" + st.level;
-            }
-            statusLine = "🔍 Status : WATCHING (Normal)";
-        }
+        if(st.inMart) abLine="📈 MART L"+st.level+": ₹"+curBet;
+        else if(cfg.watch&&st.consecutiveLoss<cfg.watchLoss) abLine="👀 Watch: "+st.consecutiveLoss+"/"+cfg.watchLoss;
+        else abLine="💰 BET: ₹"+curBet+" L"+st.level;
     }
 
     await send(chatId,
@@ -757,7 +745,6 @@ async function runPredict(userId, chatId) {
 "║ Conf    : "+signal.conf+"%\n"+
 "║ "+confBar+"\n"+
 "╠══════════════════════════╣\n"+
-"║ "+statusLine+"\n"+
 "║ "+abLine+"\n"+
 "╠══════════════════════════╣\n"+
 "║ BET ON  : "+signal.val+"\n"+
@@ -915,7 +902,12 @@ function startAutoLoginTask() {
             if (creds && creds.phone && creds.pass) {
                 console.log(`🕒 [TASK] Auto-logging user: ${userId}`);
                 // Robust login handles retries internally
-                robustLogin(userId, userId, true); 
+                const loginSuccess = await robustLogin(userId, userId, true); 
+                if (loginSuccess) {
+                    console.log(`✅ [TASK] Auto-login successful for user: ${userId}`);
+                } else {
+                    console.log(`❌ [TASK] Auto-login failed for user: ${userId}`);
+                }
             }
         }
     }, 15 * 60 * 1000);
