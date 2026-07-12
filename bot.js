@@ -557,51 +557,47 @@ function updateAfterResult(userId, wasWin, currentResult) {
     initState(userId);
     const state = userStates[userId];
 
-if (currentResult === 0) {
-        state.history = [];
-        state.mode = "NORMAL";
-        return; 
-    }
 
-    // எக்ஸ்ட்ரா வேரியபிள்ஸ் இல்லைனா செட் பண்ணிக்கிறோம்
+
     if (!state.history) state.history = [];
     if (state.recoveryCount === undefined) state.recoveryCount = 0;
 
-    // 1. ஏற்கனவே RECOVERY மோடு ஆக்டிவ் ஆக இருந்தால்
+    // 1. RECOVERY மோடு லாஜிக்
     if (state.mode === "RECOVERY") {
-        state.recoveryCount -= 1; // ஒரு பிரிடிக்ஷன் முடிஞ்சிருச்சு, சோ கவுண்ட்டை குறைக்கிறோம்
+        // வெற்றி கிடைத்தால் உடனே NORMAL மோடுக்கு மாறவும்
+        if (wasWin) {
+            state.mode = "NORMAL";
+            state.recoveryCount = 0;
+            state.history = []; // பிரஷ்ஷா ஆரம்பிக்கலாம்
+            return;
+        }
 
-        // கவுண்ட் 0-க்கு வரும்போது (சாதாரண பேட்டர்னுக்கு 1-ல இருந்து 0 ஆகும், அல்ட்ராவுக்கு 3-ல இருந்து 0 ஆகும்)
+        // தோல்வி அடைந்தால் கவுண்ட்டை குறைக்கிறோம்
+        state.recoveryCount -= 1;
+
         if (state.recoveryCount <= 0) {
             state.mode = "NORMAL";
-            state.history = [];  // மோடு மாறும்போது பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி!
+            state.history = [];
             state.recoveryCount = 0;
         }
-        
-        // RECOVERY மோடுல நடக்குற கேம் ரிசல்ட்ஸ் பழைய நார்மல் பேட்டர்னை பாதிக்கக் கூடாது என்பதால் return செய்கிறோம்
-        return; 
+        return;
     }
 
-    // 2. NORMAL மோடு ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
+    // 2. NORMAL மோடு ஹிஸ்ட்ரி
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
     const histStr = state.history.join(',');
 
-    // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (4 அல்லது அதற்கு மேற்பட்ட தொடர் நஷ்டங்கள்)
-    // எ.கா: L,L,L,L அல்லது W,L,L,L,L
-    if (/(W,L,L,L,L,L+)$/.test(histStr)) {
+    // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (5 அல்லது அதற்கு மேற்பட்ட தோல்விகள்)
+    if (/(L,L,L,L,L)$/.test(histStr)) {
         state.mode = "RECOVERY";
-        state.recoveryCount = 3; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
-        state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
-    }
-
-    // எந்த பேட்டர்னும் இல்லைனா நார்மலாவே தொடரும்
-    else {
+        state.recoveryCount = 5; // 5 பிரிடிக்ஷன் வாய்ப்பு
+        state.history = [];
+    } else {
         state.mode = "NORMAL";
     }
 }
-
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
