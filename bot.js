@@ -294,7 +294,7 @@ async function autoLogin(userId, chatId, silent = false) {
         });
 
         // 6. டோக்கன் கிடைச்சதான்னு 15 வினாடி வரை செக் பண்ணு
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 30; i++) {
             if (capturedToken) break;
             await new Promise(r => setTimeout(r, 1000));
         }
