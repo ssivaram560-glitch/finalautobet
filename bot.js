@@ -205,7 +205,7 @@ async function fetchCaptcha() {
 let loginLock = {};
 let userTokens = {}; // Assuming userTokens is managed externally
 
-// autoLogin function
+// autoLogin function (as provided previously, with chromePath adjusted for Windows if needed)
 async function autoLogin(userId, chatId, silent = false) {
     if (loginLock[userId]) return false;
     loginLock[userId] = true;
@@ -223,8 +223,10 @@ async function autoLogin(userId, chatId, silent = false) {
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
     });
 
-   try {
+    try {
         const page = await browser.newPage();
+        // Render RAM optimization
+        await page.setDefaultNavigationTimeout(90000); 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         let capturedToken = null;
@@ -236,17 +238,33 @@ async function autoLogin(userId, chatId, silent = false) {
             req.continue();
         });
 
-               // 1. லாகின் பக்கம்
-        await page.goto('https://bdgwina.me/#/login', { waitUntil: 'networkidle2', timeout: 90000 });
-        await page.waitForSelector('input');
+        // 1. லாகின் பக்கம் - load condition changed for speed
+        await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
+        
+        // Wait for inputs to appear
+        await page.waitForSelector('input', { timeout: 30000 });
         const inputs = await page.$$('input');
-        await inputs[0].type(phone, { delay: 100 });
-        await inputs[1].type(pass, { delay: 100 });
-        await page.keyboard.press('Enter');
+        
+        if (inputs.length < 2) throw new Error("Login inputs not found");
+
+        await inputs[0].type(phone, { delay: 50 });
+        await inputs[1].type(pass, { delay: 50 });
+        
+        // Click login button instead of Enter for better reliability
+        await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const loginBtn = btns.find(b => b.innerText.includes('Log in') || b.innerText.includes('Login'));
+            if (loginBtn) loginBtn.click();
+            else document.querySelector('form')?.submit();
+        });
 
         // 2. லாகின் முடிந்து ஹோம் பேஜ் வர வரை காத்திரு
-        await page.waitForNavigation({ waitUntil: 'networkidle2' });
-        await new Promise(r => setTimeout(r, 6000));
+        try {
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
+        } catch (e) {
+            console.log("Navigation timeout, but checking if we are logged in...");
+        }
+        await new Promise(r => setTimeout(r, 5000));
 
         // 3. பாப்-அப் இருந்தால் க்ளோஸ் செய்
         await page.evaluate(() => {
@@ -261,7 +279,7 @@ async function autoLogin(userId, chatId, silent = false) {
             const lotteryBtn = navItems.find(el => el.innerText.trim() === 'Lottery');
             if (lotteryBtn) lotteryBtn.click();
         });
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 2000));
 
         // 5. Win Go பட்டனை கிளிக் செய்
         await page.evaluate(() => {
@@ -273,8 +291,9 @@ async function autoLogin(userId, chatId, silent = false) {
         // 6. டோக்கன் கிடைச்சதான்னு 15 வினாடி வரை செக் பண்ணு
         for (let i = 0; i < 15; i++) {
             if (capturedToken) break;
-            await new Promise(r => setTimeout(r, 10000));
+            await new Promise(r => setTimeout(r, 1000));
         }
+
         if (capturedToken) {
             userTokens[userId] = capturedToken;
             console.log("✅ [SUCCESS] Token captured successfully!");
