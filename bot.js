@@ -881,27 +881,22 @@ async function send(chatId,text,opts={}){
 async function sendSticker(chatId,sid){try{await bot.sendSticker(chatId,sid);}catch(e){}}
 
 // ============================================================
-//  AUTO LOGIN TASK (Every 15 Minutes)
+//  AUTO LOGIN TASK WITH NOTIFICATIONS (Every 10 Minutes)
 // ============================================================
 function startAutoLoginTask() {
-    console.log("🕒 [TASK] Auto-login scheduler started (15 mins)");
+    console.log("🕒 [TASK] Auto-login scheduler started (10 mins)");
     setInterval(async () => {
         const userIds = Object.keys(userCreds);
-        console.log(`🕒 [TASK] Running auto-login for ${userIds.length} users...`);
         for (const userId of userIds) {
             const creds = userCreds[userId];
-            // Only attempt auto-login if credentials are set and no valid token exists
-            if (creds && creds.phone && creds.pass && (!userTokens[userId] || userTokens[userId].length < 20)) {
-                console.log(`🕒 [TASK] Auto-logging user: ${userId}`);
-                // robustLogin now just attempts once, the interval handles retries over time
-                await robustLogin(userId, userId, true); 
-            } else if (creds && creds.phone && creds.pass && userTokens[userId] && userTokens[userId].length >= 20) {
-                console.log(`🕒 [TASK] User ${userId} already has a valid token. Skipping auto-login.`);
-            } else {
-                console.log(`🕒 [TASK] User ${userId} has no credentials or token set. Skipping auto-login.`);
+            if (creds && creds.phone && creds.pass) {
+                console.log(`🕒 [TASK] Attempting login for user: ${userId}`);
+                
+                // 'false' என்று கொடுத்தால், வெற்றி/தோல்வி மெசேஜ் பாட்டிற்கு வரும்
+                await robustLogin(userId, userId, false); 
             }
         }
-    }, 15 * 60 * 1000); // 15 minutes
+    }, 10 * 60 * 1000); // 10 minutes
 }
 
 // ============================================================
