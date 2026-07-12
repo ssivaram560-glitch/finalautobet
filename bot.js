@@ -236,48 +236,45 @@ async function autoLogin(userId, chatId, silent = false) {
             req.continue();
         });
 
-        // 1. லாகின் பக்கம்
-await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'networkidle2', timeout: 90000 });
-await page.waitForSelector('input', { timeout: 60000 });
-const inputs = await page.$$('input');
-await inputs[0].type(phone, { delay: 100 });
-await inputs[1].type(pass, { delay: 100 });
-await page.keyboard.press('Enter');
+               // 1. லாகின் பக்கம்
+        await page.goto('https://bdgwina.me/#/login', { waitUntil: 'networkidle2', timeout: 90000 });
+        await page.waitForSelector('input');
+        const inputs = await page.$$('input');
+        await inputs[0].type(phone, { delay: 100 });
+        await inputs[1].type(pass, { delay: 100 });
+        await page.keyboard.press('Enter');
 
-// 2. லாகின் ஆனதுக்கு அப்புறம் 8 வினாடி வெயிட் பண்ணு (50 வினாடி தேவையில்லை)
-await new Promise(r => setTimeout(r, 8000));
+        // 2. லாகின் முடிந்து ஹோம் பேஜ் வர வரை காத்திரு
+        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+        await new Promise(r => setTimeout(r, 6000));
 
-// 3. பாப்-அப் க்ளோஸ் - 2 வினாடி போதும்
-await page.evaluate(() => {
-    const closeBtn = document.querySelector('.van-icon-cross') || document.querySelector('.close-icon');
-    if (closeBtn) closeBtn.click();
-});
-await new Promise(r => setTimeout(r, 2000));
+        // 3. பாப்-அப் இருந்தால் க்ளோஸ் செய்
+        await page.evaluate(() => {
+            const closeBtn = document.querySelector('.van-icon-cross') || document.querySelector('.close-icon');
+            if (closeBtn) closeBtn.click();
+        });
+        await new Promise(r => setTimeout(r, 1000));
 
-// 4. Lottery பட்டன் - 5 வினாடி போதும்
-await page.evaluate(() => {
-    const navItems = Array.from(document.querySelectorAll('div, span'));
-    const lotteryBtn = navItems.find(el => el.innerText.trim() === 'Lottery');
-    if (lotteryBtn) lotteryBtn.click();
-});
-await new Promise(r => setTimeout(r, 5000)); 
+        // 4. Lottery பட்டனை கிளிக் செய்
+        await page.evaluate(() => {
+            const navItems = Array.from(document.querySelectorAll('div, span'));
+            const lotteryBtn = navItems.find(el => el.innerText.trim() === 'Lottery');
+            if (lotteryBtn) lotteryBtn.click();
+        });
+        await new Promise(r => setTimeout(r, 5000));
 
-// 5. Win Go பட்டன் - கிளிக் பண்ணு
-await page.evaluate(() => {
-    const navItems = Array.from(document.querySelectorAll('div, span'));
-    const winGoBtn = navItems.find(el => el.innerText.trim() === 'Win Go');
-    if (winGoBtn) winGoBtn.click();
-});
+        // 5. Win Go பட்டனை கிளிக் செய்
+        await page.evaluate(() => {
+            const navItems = Array.from(document.querySelectorAll('div, span'));
+            const winGoBtn = navItems.find(el => el.innerText.trim() === 'Win Go');
+            if (winGoBtn) winGoBtn.click();
+        });
 
-// 6. டோக்கன் கிடைச்சதான்னு பார்க்க 20 முறை வெயிட் பண்ணு (ஒவ்வொரு முறைக்கும் 2 வினாடி)
-// இது மொத்தம் 40 வினாடி டோக்கன் கிடைக்க வாய்ப்பு கொடுக்கும்
-for (let i = 0; i < 20; i++) {
-    if (capturedToken) {
-        console.log("✅ Token captured successfully!");
-        break;
-    }
-    await new Promise(r => setTimeout(r, 2000));
-}
+        // 6. டோக்கன் கிடைச்சதான்னு 15 வினாடி வரை செக் பண்ணு
+        for (let i = 0; i < 15; i++) {
+            if (capturedToken) break;
+            await new Promise(r => setTimeout(r, 10000));
+        }
         if (capturedToken) {
             userTokens[userId] = capturedToken;
             console.log("✅ [SUCCESS] Token captured successfully!");
