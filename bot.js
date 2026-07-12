@@ -11,7 +11,7 @@ const BOT_TOKEN    = "8692459169:AAFW_sv72xScUpn0xFsaPTCuzJpNLO0EIBU";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@OnlineEarningapp_bot";
-const REG_LINK     = "https://bdgwinj.com//#/register?invitationCode=6435414007795";
+const REG_LINK     = "https://bdgwinuu.com/#/register?invitationCode=6435414007795";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
@@ -199,6 +199,9 @@ async function fetchCaptcha() {
     }
 }
 
+// ============================================================
+//  AUTO LOGIN (PUPPETEER VERSION)
+// ============================================================
 let loginLock = {};
 let userTokens = {}; // Assuming userTokens is managed externally
 
@@ -308,58 +311,6 @@ async function autoLogin(userId, chatId, silent = false) {
         loginLock[userId] = false;
     }
 }
-
-async function loginWithRetry(userId, chatId) {
-    if (!chatId) return; // chatId இல்லனா மெசேஜ் அனுப்ப முடியாது
-    
-    let attempts = 0;
-    const maxAttempts = 10;
-    let success = false;
-
-    await send(chatId, `🔄 Login process started for ID: ${userId}...`);
-
-    while (attempts < maxAttempts) {
-        attempts++;
-        console.log(`🔄 Attempt ${attempts} of ${maxAttempts} for user: ${userId}`);
-        
-        // autoLogin-ல ஏற்கனவே மெசேஜ் அனுப்புற மாதிரி இருந்தா அதை சரி பார்த்துக்கோங்க
-        success = await autoLogin(userId, chatId, true); // true கொடுத்தா ஆட்டோமேட்டிக்கா மெசேஜ் அனுப்பும்
-        
-        if (success) {
-            await send(chatId, `✅ Login Successful on attempt ${attempts}!`);
-            return true;
-        }
-        
-        // ஒவ்வொரு தோல்விக்கும் பாட்டுக்கு மெசேஜ் அனுப்பும்
-        await send(chatId, `⚠️ Attempt ${attempts} failed. Retrying...`);
-        
-        if (attempts < maxAttempts) {
-            await new Promise(r => setTimeout(r, 10000)); // 10 வினாடி காத்திருப்பு
-        }
-    }
-
-    // 10 அட்டெம்ப் முடிஞ்சும் லாகின் ஆகலனா
-    await send(chatId, `❌ Failed to login after ${maxAttempts} attempts! Please check credentials.`);
-    return false;
-}
-
-// 15 நிமிடத்திற்கு ஒருமுறை
-setInterval(async () => {
-    const userIds = Object.keys(userCreds);
-    console.log(`🕒 Starting scheduled login check for all users...`);
-
-    for (const userId of userIds) {
-        const chatId = userCreds[userId]?.chatId;
-        
-        // லாகின் செக் பண்ண ஆரம்பிக்கிறோம்னு யூசருக்கு ஒரு மெசேஜ் போகும்
-        if (chatId) {
-            await send(chatId, `🕒 Scheduled login check started for user: ${userId}...`);
-        }
-
-        // இப்போ லாகின் ட்ரை பண்ணும்
-        await loginWithRetry(userId, chatId);
-    }
-}, 15 * 60 * 1000);
 
 // ============================================================
 //  PLACE BET (Modified to capture token from response if available)
@@ -606,11 +557,7 @@ function updateAfterResult(userId, wasWin, currentResult) {
     initState(userId);
     const state = userStates[userId];
 
-    if (currentResult === 0) {
-        state.history = [];
-        state.mode = "NORMAL";
-        return;
-    }
+
 
     if (!state.history) state.history = [];
     if (state.recoveryCount === undefined) state.recoveryCount = 0;
@@ -824,7 +771,7 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ BET ON  : "+signal.val+"\n"+
 "╚══════════════════════════╝",
-        {reply_markup:{inline_keyboard:[[{text:"💰 REGISTER OR LOGIN NOW",url:REG_LINK}]]}}
+        {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
     // ✅ Pattern iruntha mattum bet kattum
