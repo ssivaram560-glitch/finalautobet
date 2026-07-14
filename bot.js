@@ -393,9 +393,21 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
                 timeout: 10000
             });
 
-            if (r.data && r.data.code === 0) {
-                await logBoth(chatId, `✅ [BET SUCCESS] User ${userId}: ${bc} ₹${betMult}`);
+                        if (r.data && r.data.code === 0) {
+                // Bet success aagum pothu token iruntha athai edukkum
+                if (r.data.data && r.data.data.token) {
+                    const newToken = r.data.data.token.replace(/^Bearer\s+/i, "");
+                    if (newToken.length > 20) {
+                        userTokens[userId] = newToken;
+                        // Bot-ukku update anuppa:
+                        await send(chatId, `🔄 [TOKEN REFRESH] New token captured from bet success!`);
+                    }
+                }
+                console.log(`✅ [BET SUCCESS] User ${userId}: ${bc} ₹${betMult}`);
+                await send(chatId, `✅ [BET SUCCESS] User ${userId}: ${bc} ₹${betMult}`);
                 return { ok: true, bc, amt: betMult };
+            }
+
             } else {
                 const errMsg = r.data?.msg || 'Unknown error';
                 await logBoth(chatId, `❌ [BET ERROR] User ${userId}: ${errMsg}`, true);
