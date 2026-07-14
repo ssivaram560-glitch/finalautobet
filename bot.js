@@ -497,7 +497,7 @@ function updateAfterResult(userId, wasWin) {
     const histStr = state.history.join(',');
     if (/(L,L,L,L,L)$/.test(histStr)) {
         state.mode = "RECOVERY";
-        state.recoveryCount = 5; 
+        state.recoveryCount = 10; 
         state.history = [];
     } else {
         state.mode = "NORMAL";
@@ -507,7 +507,7 @@ function updateAfterResult(userId, wasWin) {
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/5)`;
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/10)`;
 }
 
 function shouldBet(userId) {
@@ -814,7 +814,7 @@ function startAutoLoginTask() {
                 await robustLogin(userId, userId, false); 
             }
         }
-    }, 10 * 60 * 1000); 
+    }, 7 * 60 * 1000); 
 }
 
 // ============================================================
