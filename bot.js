@@ -517,13 +517,10 @@ function updateAfterResult(userId, wasWin) {
     const histStr = state.history.join(',');
     
     // Patterns to trigger RECOVERY mode:
-    const p1 = /(L,L,L,L,L)$/.test(histStr);
-    const p2 = /(W,L,L,W)$/.test(histStr);
-    const p3 = /(W,L,W)$/.test(histStr);
-    const p4 = /(W,L,L,L,W)$/.test(histStr);
-    const p5 = /(W,W,W,W,W)$/.test(histStr);
+    const p1 = /(W,L,L,L,L,L)$/.test(histStr);
+     
 
-    if (p1 || p2 || p3 || p4 || p5) {
+    if (p1) {
         state.mode = "RECOVERY";
         state.recoveryCount = 10; 
         state.history = [];
