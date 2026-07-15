@@ -479,14 +479,10 @@ function decidePrediction(list, level, userId) {
 
     let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
 
-    if (state.mode === 'RECOVERY') {
-        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
-    }
-
     return { 
         type: 'SIZE', 
         val: prediction, 
-        conf: 90, 
+        conf: 99, 
         pat: state.mode 
     };
 }
@@ -495,51 +491,33 @@ function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
 
-    if (state.mode === "RECOVERY") {
-        if (wasWin) {
-            state.mode = "NORMAL";
-            state.recoveryCount = 0;
-            state.history = []; 
-            return;
-        }
-        state.recoveryCount -= 1;
-        if (state.recoveryCount <= 0) {
-            state.mode = "NORMAL";
-            state.history = [];
-            state.recoveryCount = 0;
-        }
-        return;
-    }
-
+    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
-    const histStr = state.history.join(',');
-    
-    // Patterns to trigger RECOVERY mode:
-    const p1 = /(W,L,L,L,L,L)$/.test(histStr);
-     
-
-    if (p1) {
-        state.mode = "RECOVERY";
-        state.recoveryCount = 10; 
-        state.history = [];
-    } else {
-        state.mode = "NORMAL";
-    }
+    // Mode eppovum NORMAL-la thaan irukkum
+    state.mode = "NORMAL";
+    state.recoveryCount = 0;
 }
 
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/10)`;
+    const hist = state.history.join(',') || "EMPTY";
+    return `NORMAL | History: [${hist}]`;
 }
+
 
 function shouldBet(userId) {
     initUser(userId);
     const state = userStates[userId];
-    return state.mode === 'RECOVERY';
+    const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /W,W,W,W,L$/.test(histStr);
 }
+
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
