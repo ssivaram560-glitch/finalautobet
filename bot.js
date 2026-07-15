@@ -682,6 +682,7 @@ async function runPredict(userId, chatId) {
 // ============================================================
 //  RESULT CHECKER
 // ============================================================
+
 async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId];
@@ -716,6 +717,12 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         if(cfg.enabled && wasReal){
             if(win) await handleWin(userId,chatId,actual,num);
             else    await handleLoss(userId,chatId,actual,num);
+
+            // --- மாற்றம் இங்கே செய்யப்பட்டுள்ளது ---
+            userStates[userId].history = []; 
+            await send(chatId, "🧹 Bet முடிந்தது! History Reset செய்யப்பட்டது.");
+            // -----------------------------------
+
         } else if (cfg.enabled && !wasReal) {
             if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
             else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
