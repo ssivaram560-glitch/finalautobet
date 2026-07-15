@@ -513,12 +513,11 @@ function shouldBet(userId) {
     const state = userStates[userId];
     const histStr = state.history.join(',');
     
-    // Patterns: 
-    // 1. W,W,W,W,L (4 Wins + 1 Loss)
-    // 2. W,W,W,W,W,L (5 Wins + 1 Loss)
-    // Intha patterns vantha bet kattum
-    return /(W,W,W,W,L|W,W,W,W,W,L)$/.test(histStr);
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /W,W,W,W,L$/.test(histStr);
 }
+
 
 
 async function handleWin(userId, chatId, actual, num) {
