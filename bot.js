@@ -715,19 +715,18 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         if(win){s.win++;s.winStreak++;s.lossStreak=0;if(s.winStreak>s.maxWinStreak)s.maxWinStreak=s.winStreak;}
         else{s.loss++;s.lossStreak++;s.winStreak=0;if(s.lossStreak>s.maxLossStreak)s.maxLossStreak=s.lossStreak;}
 
-        if(cfg.enabled && wasReal){
-    if(win) await handleWin(userId,chatId,actual,num);
-    else    await handleLoss(userId,chatId,actual,num);
+     if(cfg.enabled && wasReal){
+            if(win) await handleWin(userId,chatId,actual,num);
+            else    await handleLoss(userId,chatId,actual,num);
 
-    // --- Condition: L,W,L pattern iruntha mattum history reset akanum ---
-    const histStr = userStates[userId].history.join(',');
-    if (/L,W,L$/.test(histStr)) {
-        userStates[userId].history = []; 
-        await send(chatId, "🧹 L,W,L Pattern முடிந்தது! History Reset செய்யப்பட்டது.");
-    } else {
-        await send(chatId, "✅ Bet முடிந்தது! (History NOT Reset)");
-    }
-}
+            // --- Condition: L,W,L pattern iruntha mattum history reset akanum ---
+            const histStr = userStates[userId].history.join(',');
+            if (/L,W,L$/.test(histStr)) {
+                userStates[userId].history = []; 
+                await send(chatId, "🧹 L,W,L Pattern முடிந்தது! History Reset செய்யப்பட்டது.");
+            } else {
+                await send(chatId, "✅ Bet முடிந்தது! (History NOT Reset)");
+            }
 
             // -----------------------------------
 
