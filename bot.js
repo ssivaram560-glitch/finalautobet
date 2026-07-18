@@ -515,7 +515,7 @@ function shouldBet(userId) {
     
     // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
     // Intha pattern vantha mattum thaan bet kattum
-    return /L,W,W,W,W,L$/.test(histStr);
+    return /L,W,W,W,W,W,L$/.test(histStr);
 }
 
 
