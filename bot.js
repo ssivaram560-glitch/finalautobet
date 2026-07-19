@@ -668,7 +668,7 @@ async function runPredict(userId, chatId) {
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
-    if (cfg.enabled && shouldBet(userId)) { 
+    if (cfg.enabled ) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
@@ -687,7 +687,7 @@ async function runPredict(userId, chatId) {
 async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId];
-    const wasReal=cfg.enabled && shouldBet(userId);
+    const wasReal=cfg.enabled ;
     
     const iv=setInterval(async()=>{
         if(!running[userId])return clearInterval(iv);
@@ -720,9 +720,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             else    await handleLoss(userId,chatId,actual,num);
 
             // --- மாற்றம் இங்கே செய்யப்பட்டுள்ளது ---
-            userStates[userId].history = []; 
-            await send(chatId, "🧹 Bet முடிந்தது! History Reset செய்யப்பட்டது.");
-            // -----------------------------------
+            
 
         } else if (cfg.enabled && !wasReal) {
             if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
