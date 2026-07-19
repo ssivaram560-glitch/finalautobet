@@ -520,6 +520,7 @@ function shouldBet(userId) {
 
 
 
+
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
@@ -668,7 +669,7 @@ async function runPredict(userId, chatId) {
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
-    if (cfg.enabled && shouldBet(userId)) { 
+    if (cfg.enabled ) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
@@ -687,7 +688,7 @@ async function runPredict(userId, chatId) {
 async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId];
-    const wasReal=cfg.enabled && shouldBet(userId);
+    const wasReal=cfg.enabled ;
     
     const iv=setInterval(async()=>{
         if(!running[userId])return clearInterval(iv);
