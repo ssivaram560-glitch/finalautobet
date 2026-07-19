@@ -515,9 +515,8 @@ function shouldBet(userId) {
     
     // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
     // Intha pattern vantha mattum thaan bet kattum
-    return /(?:^|,)(W,L|W,L,L|W,L,L,L|W,L,L,L,L|W,L,W,L|L,W,W|W,W,W,W|W,W,W|W,W|W)$/.test(histStr);
+    return /L,W,W,W,W,W,L$/.test(histStr);
 }
-
 
 
 
@@ -669,7 +668,7 @@ async function runPredict(userId, chatId) {
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
-    if (cfg.enabled ) { 
+    if (cfg.enabled && shouldBet(userId)) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
@@ -688,7 +687,7 @@ async function runPredict(userId, chatId) {
 async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId];
-    const wasReal=cfg.enabled ;
+    const wasReal=cfg.enabled && shouldBet(userId);
     
     const iv=setInterval(async()=>{
         if(!running[userId])return clearInterval(iv);
@@ -721,7 +720,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             else    await handleLoss(userId,chatId,actual,num);
 
             // --- மாற்றம் இங்கே செய்யப்பட்டுள்ளது ---
-            
+            userStates[userId].history = []; 
             await send(chatId, "🧹 Bet முடிந்தது! History Reset செய்யப்பட்டது.");
             // -----------------------------------
 
