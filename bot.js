@@ -658,18 +658,17 @@ function stk(arr, key) {
 async function runPredict(userId, chatId) {
     if(!running[userId])return;
 
-    // --- RESTART CHECK (FIXED) ---
+    // --- NEW: WAITING CHECK ---
     const st = autobetState[userId];
-    if (st && st.isWaiting) {
+    if (st.isWaiting) {
         if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
             st.nextStartTime = null;
-            profitTrack[userId].pnl = 0; // Reset P&L for new section
+            profitTrack[userId].pnl = 0; // Reset P&L for new session
             await send(chatId, "🔄 Timed Restart! Starting new section now...");
-            return setTimeout(()=>runPredict(userId,chatId), 2000);
         } else {
-            // Waiting period-la iruntha, 30s kalichi thirumba check pannum
-            return setTimeout(()=>runPredict(userId,chatId), 30000);
+            // Waiting period-la iruntha, 1 min kalichi thirumba check pannum
+            return setTimeout(()=>runPredict(userId,chatId), 60000);
         }
     }
 
@@ -752,9 +751,8 @@ async function runPredict(userId, chatId) {
 // ============================================================
 
 async function checkResult(userId, chatId, target, predicted, predType) {
-async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
-    const cfg=autobetCfg[userId], pt=profitTrack[userId]; // st inga define panna koodathu, interval kulla pannanum
+    const cfg=autobetCfg[userId],st=autobetState[userId],pt=profitTrack[userId];
     const wasReal=cfg.enabled ;
     
     const iv=setInterval(async()=>{
@@ -787,20 +785,21 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             if(win) await handleWin(userId,chatId,actual,num);
             else    await handleLoss(userId,chatId,actual,num);
 
-            // --- PROFIT STOP & RESTART LOGIC (FIXED) ---
-            const st_fixed = autobetState[userId]; // Inga define pannanum
+            // --- NEW: PROFIT STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
-                st_fixed.isWaiting = true;
-                st_fixed.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes-la delay
-                const restartTimeStr = new Date(st_fixed.nextStartTime).toLocaleTimeString();
+                st.isWaiting = true;// Intha line-ah mathunga:
+st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calculation
+
+                const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
                 await send(chatId, 
                     "🎯 TARGET REACHED!\n" +
                     "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
                     "🛑 Bot Paused.\n" +
-                    "⏳ Delay: " + cfg.restartDelay + " minutes\n" +
+                    "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
                     "🔄 Next Section: " + restartTimeStr
                 );
             }
+
         } else if (cfg.enabled && !wasReal) {
             if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
             else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
@@ -813,11 +812,9 @@ async function checkResult(userId, chatId, target, predicted, predType) {
                 await sendSticker(chatId,LOSS_STICKER);
             }
         }
-        // Bot waiting period-la illana mattum thaan adutha prediction aarambikkum
         setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},8000);
     },10000);
 }
-
 
 
 // ============================================================
