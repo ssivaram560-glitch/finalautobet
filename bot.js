@@ -497,18 +497,6 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-let userStates = {};
-
-function initState(userId) {
-    if (!userStates[userId]) {
-   userStates[userId] = {
-    mode: "NORMAL",
-    recoveryCount: 0,
-    winBeforeLoss: 0,
-    lossStreak: 0
-};
-    }
-}
 
 function decidePrediction(list, currentLevel, userId) {
     
@@ -516,11 +504,11 @@ function decidePrediction(list, currentLevel, userId) {
         return null;
     }
 
-    initState(userId);
+    initUser(userId); // Ensure user state is initialized
     const state = userStates[userId];
 
     // ═════════════════════════════════════════════════════════════════════
-    //  L3+: FORCED WIN
+    //  L3+: FORCED WIN (This section was empty, keeping it as is if it's a placeholder)
     // ═════════════════════════════════════════════════════════════════════
     
 
@@ -534,9 +522,7 @@ function decidePrediction(list, currentLevel, userId) {
 
 
 // Previous result 0னா prediction வேண்டாம்
-if (currentResult === 0) {
-    return null;
-}
+
 
     // STEP 1: Calculate next period
     const nextPeriodNum = BigInt(currentPeriod) + 1n;
@@ -544,6 +530,7 @@ if (currentResult === 0) {
     const nextLast3Num = parseInt(nextPeriod.slice(-3));
 
     // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
+    // This logic is kept as is, assuming it's the intended prediction mechanism.
     const answer = nextLast3Num * Math.exp(currentResult);
 
     // STEP 3: Get 14 digits (remove decimal, take first 14)
@@ -571,7 +558,7 @@ if (currentResult === 0) {
 }
 
 function updateAfterResult(userId, wasWin) {
-    initState(userId);
+    initUser(userId); // Ensure user state is initialized
     const state = userStates[userId];
 
     // ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
@@ -608,12 +595,12 @@ function updateAfterResult(userId, wasWin) {
     }
 }
 function getStatus(userId) {
-    initState(userId);
+    initUser(userId); // Ensure user state is initialized
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/1)`;
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY`; // Removed recoveryCount display
 }
 
-module.exports = { decidePrediction, updateAfterResult, getStatus, initState };
+// module.exports = { decidePrediction, updateAfterResult, getStatus, initState }; // Removed initState from export
 
 function shouldBetNow(userId) {
     const cfg = autobetCfg[userId], st = autobetState[userId];
