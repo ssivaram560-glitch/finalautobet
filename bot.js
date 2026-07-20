@@ -620,6 +620,11 @@ async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
     
+    // --- CORRECTED PROFIT CALCULATION ---
+    let winMultiplier = 2; // Default 2x
+    if (num === 0 || num === 5) {
+        winMultiplier = 1.5; // 1.5x for 0 or 5
+    }
     
     let grossWin = amt * winMultiplier; // Gross win before fee
     let netWin = grossWin * 0.98; // 2% fee on gross win
