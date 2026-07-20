@@ -105,6 +105,26 @@ async function fetchList() {
         return null;
     }
 }
+async function getLiveBalance(userId) {
+    let token = getToken(userId);
+    if (!token) return null;
+    try {
+        const r = await axios.get("https://api.bdg88zf.com/api/webapi/GetBalance", {
+            headers: {
+                "Authorization": "Bearer " + token,
+                "Ar-Origin": "https://bdgwin901.com",
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+            }
+        });
+        if (r.data && r.data.code === 0) {
+            return r.data.data.balance;
+        }
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
 
 function initUser(id) {
     if (!stats[id])        stats[id]        = { total:0,win:0,loss:0,lossStreak:0,winStreak:0,maxWinStreak:0,maxLossStreak:0 };
@@ -816,19 +836,44 @@ function profitReport(chatId,userId){
 "Mart: ₹"+amounts.join("→₹")
     );
 }
-function autobetStatus(chatId,userId){
-    const cfg=autobetCfg[userId],st=autobetState[userId],pt=profitTrack[userId];
-    const amounts=cfg.customBets.slice(0,cfg.maxLvl);
-    const creds=userCreds[userId]||{};
+async function autobetStatus(chatId, userId) {
+    const cfg = autobetCfg[userId], st = autobetState[userId], pt = profitTrack[userId];
+    const amounts = cfg.customBets.slice(0, cfg.maxLvl);
+    const creds = userCreds[userId] || {};
+    
+    // --- LIVE BALANCE CHECK ---
+    let liveBal = "❌ Login Required";
+    let token = getToken(userId);
+    if (token && token.length > 20) {
+        try {
+            const r = await axios.get("https://api.bdg88zf.com/api/webapi/GetBalance", {
+                headers: {
+                    "Authorization": "Bearer " + token,
+                    "Ar-Origin": "https://bdgwin901.com",
+                    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                },
+                timeout: 5000
+            });
+            if (r.data && r.data.code === 0) {
+                liveBal = "₹" + r.data.data.balance;
+            }
+        } catch (e) {
+            liveBal = "⚠️ API Error";
+        }
+    }
+    // --------------------------
+
     let waitLine = "";
     if (st.isWaiting) {
         const diff = Math.round((st.nextStartTime - Date.now()) / 60000);
         waitLine = "\n⏳ Waiting: " + diff + " mins to restart";
     }
+
     send(chatId,
 "🤖 AUTOBET STATUS\n\n"+
+"💰 Live Balance: "+liveBal+"\n"+ // Live balance inga theriyum
 "Enabled  : "+(cfg.enabled?"✅ ON":"❌ OFF")+"\n"+
-"Token    : "+(getToken(userId).length>20?"✅":"❌")+"\n"+
+"Token    : "+(token.length>20?"✅":"❌")+"\n"+
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n"+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+st.consecutiveLoss+"/"+cfg.watchLoss+"\n"+
@@ -842,6 +887,7 @@ waitLine+"\n"+
 "Mart: ₹"+amounts.join("→₹")
     );
 }
+
 
 
 // ============================================================
@@ -1107,38 +1153,28 @@ function addHandlers(){
         if(text==="❌ Disable AutoBet"){autobetCfg[id].enabled=false;return send(id,"❌ AutoBet OFF",{reply_markup:userMenu(id)});}
         if(text==="👀 Watch Mode ON") {autobetCfg[id].watch=true;return send(id,"👀 Watch ON — "+autobetCfg[id].watchLoss+" losses → bet");}
         if(text==="👀 Watch Mode OFF"){autobetCfg[id].watch=false;return send(id,"👀 Watch OFF — Direct bet!");}
-                if(txt==="💰 Set Base Bet"){userAction[id]="SET_BASE";return send(id,"Enter base bet amount (e.g. 1):");}
-        if(txt==="📈 Set Max Level"){userAction[id]="SET_MAX";return send(id,"Enter max level (1-10):");}
-        
-        // --- ITHAI INGA PASTE PANNUMGA ---
-        if(txt==="🎯 Set Profit Target"){userAction[id]="SET_TARGET";return send(id,"Enter target profit (e.g. 1000):");}
-        if(txt==="⏳ Set Section Delay"){userAction[id]="SET_DELAY";return send(id,"Enter restart delay in hours (e.g. 1):");}
-        // --------------------------------
-        if(userAction[id]==="SET_CUSTOM"){
-            const v=txt.split(",").map(x=>parseFloat(x.trim()));
-            if(v.some(isNaN))return send(id,"Invalid list.");
-            autobetCfg[id].customBets=v;userAction[id]=null;
-            return send(id,"✅ Custom bets updated.");
-        }
+                        // --- CORRECTED SETTINGS HANDLERS ---
+        if(text==="💰 Set Base Bet"){userAction[id]={action:"setbase"};return send(id,"Enter base bet amount (e.g. 1):");}
+        if(text==="📈 Set Max Level"){userAction[id]={action:"setlvl"};return send(id,"Enter max level (1-10):");}
+        if(text==="🎯 Set Profit Target"){userAction[id]={action:"settarget"};return send(id,"Enter target profit (e.g. 1000):");}
+        if(text==="⏳ Set Section Delay"){userAction[id]={action:"setdelay"};return send(id,"Enter restart delay in hours (e.g. 1):");}
 
-        // --- ITHAI INGA PASTE PANNUMGA ---
-        if(userAction[id]==="SET_TARGET"){
-            const v=parseFloat(txt);if(isNaN(v))return send(id,"Invalid number.");
-            autobetCfg[id].targetProfit=v;userAction[id]=null;
+        // --- CORRECTED INPUT SAVING ---
+        if(userAction[id] && userAction[id].action === "settarget"){
+            const v=parseFloat(text);if(isNaN(v))return send(id,"Invalid number.");
+            autobetCfg[id].targetProfit=v;delete userAction[id];
             return send(id,"✅ Profit target set to ₹"+v);
         }
-        if(userAction[id]==="SET_DELAY"){
-            const v=parseFloat(txt);if(isNaN(v))return send(id,"Invalid number.");
-            autobetCfg[id].restartDelay=v;userAction[id]=null;
+        if(userAction[id] && userAction[id].action === "setdelay"){
+            const v=parseFloat(text);if(isNaN(v))return send(id,"Invalid number.");
+            autobetCfg[id].restartDelay=v;delete userAction[id];
             return send(id,"✅ Section delay set to "+v+" hour(s)");
         }
-        // --------------------------------
+        
+        // --- IMPORTANT: AWAIT ADDED ---
+        if(text==="📊 AutoBet Status") return await autobetStatus(msg.chat.id,id);
 
-        if(text==="📈 Set Max Level"){userAction[id]={action:"setlvl"};const a=MULT.slice(0,10).map(m=>autobetCfg[id].baseBet*m);return send(id,"📈 Enter Max Martingale Level (1-10):\n(Current: "+autobetCfg[id].maxLvl+")\n\nExample Amounts:\n"+a.map((v,i)=>"L"+(i+1)+": ₹"+v).join("\n"));}
-        if(text==="🔢 Set Watch Losses"){userAction[id]={action:"setwloss"};return send(id,"🔢 Enter Watch Loss Count:\n(Current: "+autobetCfg[id].watchLoss+")\n\nExample: 3 means bot waits for 3 losses, then starts betting.");}
-        if(text==="📝 Set Custom Bets"){userAction[id]={action:"setcustom"};return send(id,"📝 Enter Custom Bet Sequence (comma separated):\nExample: 1,4,7,9,15\n\n(This will also update your Max Level automatically)");}
-        if(text==="📊 AutoBet Status")return autobetStatus(msg.chat.id,id);
-        if(text==="🔙 Back")return send(id,"Main Menu",{reply_markup:userMenu(id)});
+        if(text==="🔙 Back")return await send(id,"Main Menu",{reply_markup:userMenu(id)});
 
         if(text==="🔑 My Token"){
             const tok=getToken(id),creds=userCreds[id]||{};
