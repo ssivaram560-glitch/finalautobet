@@ -566,9 +566,9 @@ async function handleWin(userId, chatId, actual, num) {
     
     // 0 illa 5 vantha 1.5x, mathapadi 2x
     if (num === 0 || num === 5) {
-        winAmt = contractAmt * 0.98;
+        winAmt = contractAmt * 1.5;
     } else {
-        winAmt = contractAmt * 0.98;
+        winAmt = contractAmt * 2;
     }
     
     let profit = winAmt - amt; // Net Profit
