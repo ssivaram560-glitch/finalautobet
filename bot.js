@@ -497,118 +497,63 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-
-function decidePrediction(list, currentLevel, userId) {
-    
-    if (!list || list.length < 2) {
-        return null;
-    }
-
-    initUser(userId); // Ensure user state is initialized
+function decidePrediction(list, level, userId) {
+    initUser(userId);
     const state = userStates[userId];
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L3+: FORCED WIN (This section was empty, keeping it as is if it's a placeholder)
-    // ═════════════════════════════════════════════════════════════════════
-    
-
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L1-L2: NORMAL OR RECOVERY MODE
-    // ═════════════════════════════════════════════════════════════════════
-
-    const currentPeriod = String(list[0].issueNumber);
+    const currentPeriod = list[0].issueNumber;
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
-
-// Previous result 0னா prediction வேண்டாம்
-
-
-    // STEP 1: Calculate next period
     const nextPeriodNum = BigInt(currentPeriod) + 1n;
     const nextPeriod = nextPeriodNum.toString();
     const nextLast3Num = parseInt(nextPeriod.slice(-3));
 
-    // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
-    // This logic is kept as is, assuming it's the intended prediction mechanism.
     const answer = nextLast3Num * Math.exp(currentResult);
-
-    // STEP 3: Get 14 digits (remove decimal, take first 14)
     const answerStr = answer.toString();
     const noDecimal = answerStr.replace('.', '');
     const first14 = noDecimal.substring(0, 14);
-
-    // STEP 4: Get last digit
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
-    // STEP 5: Apply logic based on MODE
     let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
-
-    // RECOVERY மோட்ல மட்டும் ஆப்போசிட் பண்ணுவோம்
-    if (state.mode === 'RECOVERY') {
-        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
-    }
 
     return { 
         type: 'SIZE', 
         val: prediction, 
-        conf: 90, 
+        conf: 99, 
         pat: state.mode 
     };
 }
 
 function updateAfterResult(userId, wasWin) {
-    initUser(userId); // Ensure user state is initialized
+    initUser(userId);
     const state = userStates[userId];
 
-    // ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
-    if (!state.history) state.history = [];
+    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
-    const histStr = state.history.join(',');
-
-    // 1. RECOVERY மோட் முடிஞ்சா, ரீசெட் பண்ணிடுவோம்
-    if (state.mode === "RECOVERY") {
-        state.mode = "NORMAL";
-        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
-        return;
-    }
-
-    // 2. பேட்டர்ன் அனாலிசிஸ்
-    // Pattern 1: (W,L), (W,W,L), (W,W,W,L) -> RECOVERY
-    if (histStr.endsWith('W,L') || histStr.endsWith('W,W,L') || histStr.endsWith('W,W,W,L')) {
-        state.mode = "RECOVERY";
-    }
-    // Pattern 2: 4+ W followed by L -> NORMAL (ரீசெட் மட்டும்)
-    else if (/(W,W,W,W+),L$/.test(histStr)) {
-        state.mode = "NORMAL";
-        state.history = []; 
-    }
-    // Pattern 3: 4+ L -> RECOVERY
-    else if (/(L,L,L,L+)/.test(histStr)) {
-        state.mode = "RECOVERY";
-    }
-    // Default
-    else {
-        state.mode = "NORMAL";
-    }
+    // Mode eppovum NORMAL-la thaan irukkum
+    state.mode = "NORMAL";
+    state.recoveryCount = 0;
 }
+
 function getStatus(userId) {
-    initUser(userId); // Ensure user state is initialized
+    initUser(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY`; // Removed recoveryCount display
+    const hist = state.history.join(',') || "EMPTY";
+    return `NORMAL | History: [${hist}]`;
 }
 
-// module.exports = { decidePrediction, updateAfterResult, getStatus, initState }; // Removed initState from export
 
-function shouldBetNow(userId) {
-    const cfg = autobetCfg[userId], st = autobetState[userId];
-    if (!cfg.enabled) return false;
-    if (st.inMart) return true;
-    if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) return false;
-    return true;
+function shouldBet(userId) {
+    initUser(userId);
+    const state = userStates[userId];
+    const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /L,W,W,W,W,W,L$/.test(histStr);
 }
+
 
 
 async function handleWin(userId, chatId, actual, num) {
