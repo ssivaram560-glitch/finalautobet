@@ -70,11 +70,12 @@ async function logBoth(chatId, msg, isError = false) {
     if (isError) console.error(msg);
     else console.log(msg);
     if (chatId) {
+        // Use the global bot instance if available
         if (bot) {
             try {
                 await bot.sendMessage(chatId, msg);
             } catch (e) {
-                // Ignore
+                // Ignore message sending errors to prevent loops
             }
         }
     }
@@ -116,10 +117,16 @@ function initUser(id) {
         maxLvl:5, 
         enabled:false, 
         customBets:[1,3,9,27,81],
-        targetProfit: 1000,    // Default target profit
-        restartDelay: 1        // Default restart delay in hours
+        targetProfit: 1000,    // NEW FEATURE
+        restartDelay: 1        // NEW FEATURE (hours)
     };
-    if (!autobetState[id]) autobetState[id] = { level:1, consecutiveLoss:0, inMart:false, isWaiting: false, nextStartTime: null };
+    if (!autobetState[id]) autobetState[id] = { 
+        level:1, 
+        consecutiveLoss:0, 
+        inMart:false,
+        isWaiting: false,      // NEW FEATURE
+        nextStartTime: null    // NEW FEATURE
+    };
     if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
 function hasAccess(id)  { return !!(usersAccess[id] && Date.now() < usersAccess[id]); }
@@ -279,7 +286,7 @@ async function autoLogin(userId, chatId, silent = false) {
         try {
             await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
         } catch (e) {
-            // Ignore timeout
+            // Ignore timeout, we'll check token anyway
         }
         await new Promise(r => setTimeout(r, 5000));
 
@@ -308,6 +315,7 @@ async function autoLogin(userId, chatId, silent = false) {
         }
 
         if (capturedToken) {
+            // Success: Update token only when captured
             userTokens[userId] = capturedToken;
             await logBoth(chatId, `✅ [SUCCESS] Token captured successfully for user ${userId}!`);
             return true;
@@ -324,6 +332,9 @@ async function autoLogin(userId, chatId, silent = false) {
     }
 }
 
+// ============================================================
+//  ROBUST LOGIN WITH CONTINUOUS RETRY
+// ============================================================
 async function robustLogin(userId, chatId, silent = false) {
     let success = await autoLogin(userId, chatId, silent);
     if (!success && !silent && chatId) {
@@ -332,9 +343,18 @@ async function robustLogin(userId, chatId, silent = false) {
     return success;
 }
 
+// ============================================================
+//  PLACE BET
+// ============================================================
+// PLACE BET (Modified to capture token from response if available)
+// ============================================================
+// ============================================================
+//  IMPROVED PLACE BET FUNCTION (Silent Retries & Multi-Request Fix)
+// ============================================================
 async function placeBet(userId, chatId, period, prediction, predType, level) {
     let token = getToken(userId);
     if (!token || token.length < 20) {
+        console.log("[PLACE BET] Token missing or invalid, attempting autoLogin...");
         const ok = await autoLogin(userId, chatId, true);
         if (!ok) { 
             await send(chatId,"❌ Token இல்லை!\n/setcreds FULLPHONE PASSWORD"); 
@@ -411,8 +431,12 @@ function decidePrediction(list, level, userId) {
 function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
+
+    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
+
+    // Mode eppovum NORMAL-la thaan irukkum
     state.mode = "NORMAL";
     state.recoveryCount = 0;
 }
@@ -424,12 +448,18 @@ function getStatus(userId) {
     return `NORMAL | History: [${hist}]`;
 }
 
+
 function shouldBet(userId) {
     initUser(userId);
     const state = userStates[userId];
     const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
     return /L,W,W,W,W,W,L$/.test(histStr);
 }
+
+
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
@@ -516,18 +546,16 @@ function stk(arr, key) {
 async function runPredict(userId, chatId) {
     if(!running[userId])return;
 
-    // Check if waiting for restart
+    // --- TIMED RESTART CHECK ---
     const st=autobetState[userId];
     const cfg=autobetCfg[userId];
     if (st.isWaiting) {
         if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
             st.nextStartTime = null;
-            profitTrack[userId].pnl = 0; // Reset PNL for new session
-            await send(chatId, "🔄 Timed restart! Profit target reached previously. Starting new section now...");
+            profitTrack[userId].pnl = 0; // Reset PNL for new section
+            await send(chatId, "🔄 Section Restart! New session starting now...");
         } else {
-            const timeLeft = Math.round((st.nextStartTime - Date.now()) / 60000);
-            console.log(`[WAIT] User ${userId} waiting for restart. ${timeLeft} mins left.`);
             return setTimeout(()=>runPredict(userId,chatId), 60000);
         }
     }
@@ -599,6 +627,8 @@ async function runPredict(userId, chatId) {
         if (result && result.ok) {
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
         }
+    } else if (cfg.enabled) {
+        await logBoth(chatId, "👀 No pattern, skipping bet.");
     }
 
     checkResult(userId, chatId, next, signal.val, signal.type);
@@ -643,19 +673,17 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             if(win) await handleWin(userId,chatId,actual,num);
             else    await handleLoss(userId,chatId,actual,num);
 
-            // --- PROFIT STOP & TIMED RESTART LOGIC ---
+            // --- PROFIT TARGET STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
                 st.isWaiting = true;
                 st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 60 * 1000);
                 const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
                 await send(chatId, 
-                    "🎯 TARGET REACHED!\n\n" +
-                    "Profit Target: ₹" + cfg.targetProfit + "\n" +
-                    "Current P&L: ₹" + pt.pnl.toFixed(2) + "\n\n" +
-                    "🛑 Bot stopping now...\n" +
-                    "⏳ Section Delay: " + cfg.restartDelay + " hour(s)\n" +
-                    "🔄 Next Section Start: " + restartTimeStr + "\n\n" +
-                    "Bot will restart automatically."
+                    "🎯 TARGET REACHED!\n" +
+                    "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
+                    "🛑 Bot Paused.\n" +
+                    "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
+                    "🔄 Next Section: " + restartTimeStr
                 );
             }
 
@@ -918,6 +946,8 @@ function addHandlers(){
         if(txt==="📈 Set Max Level"){userAction[id]="SET_MAX";return send(id,"Enter max level (1-10):");}
         if(txt==="🔢 Set Watch Losses"){userAction[id]="SET_WATCH_L";return send(id,"Enter watch losses (e.g. 5):");}
         if(txt==="📝 Set Custom Bets"){userAction[id]="SET_CUSTOM";return send(id,"Enter custom bets (e.g. 1,3,10,30,90):");}
+        
+        // --- NEW HANDLERS ---
         if(txt==="🎯 Set Profit Target"){userAction[id]="SET_TARGET";return send(id,"Enter target profit (e.g. 1000):");}
         if(txt==="⏳ Set Section Delay"){userAction[id]="SET_DELAY";return send(id,"Enter restart delay in hours (e.g. 1):");}
 
