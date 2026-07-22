@@ -497,6 +497,22 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
+// 사용자 상태 초기화 헬퍼 함수 (필요시 정의됨을 가정)
+function initUser(userId) {
+    if (!userStates[userId]) {
+        userStates[userId] = {
+            mode: "NORMAL",
+            history: []
+        };
+    }
+}
+
+// 기존 상태 초기화 함수 (오타 방지용)
+function initState(userId) {
+    initUser(userId);
+}
+
+// 1. 예측을 결정하는 함수 (항상 실행됨)
 function decidePrediction(list, level, userId) {
     initUser(userId);
     const state = userStates[userId];
@@ -523,8 +539,7 @@ function decidePrediction(list, level, userId) {
     };
 }
 
-
-// 1. ரிசல்ட் வந்த பிறகு மோடை அப்டேட் செய்யும் பங்க்ஷன்
+// 2. ரிசல்ட் வந்த பிறகு மோடை அப்டேட் செய்யும் பங்க்ஷன்
 function updateAfterResult(userId, wasWin) {
     initState(userId);
     const state = userStates[userId];
@@ -545,42 +560,33 @@ function updateAfterResult(userId, wasWin) {
     const isNormalPattern = histStr.endsWith('W,L') || 
                             /(W,W,W,W+),L$/.test(histStr);
 
-    // 3. பேட்டர்ன் மேட்ச் ஆனா பெட் முடிஞ்சது (Win or Loss), 
-    // இப்போ ஹிஸ்ட்ரியை அழிச்சு பிரஷ்ஷா மாத்து
+    // 3. பேட்டர்ன் மேட்ச் ஆனா மோடை மாத்திவிட்டு ஹிஸ்ட்ரியை பிரஷ்ஷாக்கு
     if (isRecoveryPattern || isNormalPattern) {
-        
-        // RECOVERY மோடுல வின் பண்ணிட்டா நார்மலுக்கு வா
         if (state.mode === "RECOVERY" && wasWin) {
             state.mode = "NORMAL";
-        } 
-        // பேட்டர்ன் சிக்கிடுச்சுனா மோடு செட் பண்ணு
-        else if (isRecoveryPattern) {
+        } else if (isRecoveryPattern) {
             state.mode = "RECOVERY";
         } else {
             state.mode = "NORMAL";
         }
 
-        // <<< இங்கதான் மேஜிக்: பேட்டர்ன் முடிஞ்சதும் ஹிஸ்ட்ரியை காலி பண்ணு >>>
         state.history = []; 
-        console.log(`[DEBUG] Pattern matched! History cleared. Fresh start.`);
+        console.log(`[DEBUG] Pattern matched! Mode updated to ${state.mode}. History cleared.`);
     }
+} // <--- 닫히지 않았던 괄호 수정 완료!
 
+// 3. 현재 상태를 리턴하는 함수
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
     const hist = state.history.join(',') || "EMPTY";
-    return `NORMAL | History: [${hist}]`;
+    return `${state.mode} | History: [${hist}]`;
 }
 
-
+// 4. [수정됨] 항상 베팅을 하도록 true를 리턴
 function shouldBet(userId) {
-    initUser(userId);
-    const state = userStates[userId];
-    const histStr = state.history.join(',');
-    
-    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
-    // Intha pattern vantha mattum thaan bet kattum
-    return /L,W,W,W,W,W,L$/.test(histStr);
+    // 기존의 까다로운 정규식 조건 제거 -> 항상 무조건 베팅 실행
+    return true; 
 }
 
 
