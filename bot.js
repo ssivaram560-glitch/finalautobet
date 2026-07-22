@@ -526,11 +526,11 @@ function decidePrediction(list, level, userId) {
     const pattern = getBSPattern(list);
     const streak = getStreakInfo(pattern);
     
-    let predictionSize = 'BIG';
-    let confidence = 75;
-    let method = 'NORMAL';
+    let predictionSize = 'SKIP';
+    let confidence = 0;
+    let method = 'SKIP_UNKNOWN_PATTERN';
 
-    // 1. Skip Condition for unpredictable patterns like S, S, B, B
+    // 1. Skip Condition for unpredictable patterns like S, S, B, B or B, B, S, S
     if (pattern.startsWith('SSBB') || pattern.startsWith('BBSS') || pattern.startsWith('SSBBSS') || pattern.startsWith('BBSSBB')) {
         return {
             size: 'SKIP',
@@ -540,45 +540,47 @@ function decidePrediction(list, level, userId) {
         };
     }
 
-    // 2. Dragon Zone & Streak Ride (Dragon la loss varra varaikkum ride panrathu)
+    // 2. Dragon Zone (Dragon la loss varra varaikkum ride panrathu)
     if (streak.count >= 4) {
-        // Continue same side in dragon until it breaks/losses
         predictionSize = streak.char === 'B' ? 'BIG' : 'SMALL';
-        confidence = 88;
+        confidence = 90;
         method = 'DRAGON_RIDE_' + streak.count + 'X';
     } 
-    // 3. Loss Recovery & Pattern Switching (B, S, B, S -> Loss -> Switch flow)
+    // 3. Loss Recovery & Strict Flow Logic (B,S,B,S,S -> loss -> S -> loss -> S flow)
     else if (state.history && state.history.length > 0) {
         const lastResult = state.history[state.history.length - 1];
         if (lastResult === 'L') {
-            // If previous failed, switch/alternate based on loss sequence
-            const lastActualNum = parseInt(list[0].number || list[0].winNumber || 0);
-            const lastActualSize = getBigSmall(lastActualNum);
-            
-            // Alternate logic as requested
-            predictionSize = lastActualSize === 'BIG' ? 'SMALL' : 'BIG';
+            const recentResults = state.history.slice(-2);
+            if (recentResults.length >= 2 && recentResults[0] === 'L' && recentResults[1] === 'L') {
+                predictionSize = 'SMALL'; // As specified: loss -> loss -> S
+            } else {
+                predictionSize = 'SMALL'; // First loss after B,S,B,S,S
+            }
             confidence = 85;
-            method = 'LOSS_RECOVERY_SWITCH';
+            method = 'LOSS_RECOVERY_FLOW';
         }
     }
 
-    // 4. Zigzag / Alternating Flow (B, S, B, S)
-    if (method === 'NORMAL') {
-        const recent = pattern.slice(0, 4); // Check recent alternating
-        if (recent === 'BSBS' || recent === 'SBSB') {
-            const lastChar = pattern[0];
-            predictionSize = lastChar === 'B' ? 'SMALL' : 'BIG';
-            confidence = 82;
-            method = 'ZIGZAG_RIDE';
-        } else {
-            // Default fallback based on latest trend
-            predictionSize = pattern[0] === 'B' ? 'BIG' : 'SMALL';
-            confidence = 78;
-            method = 'TREND_DEFAULT';
-        }
+    // 4. Zigzag Flow (B, S, B, S - Only allow this specific pattern)
+    const recent = pattern.slice(0, 4);
+    if (method === 'SKIP_UNKNOWN_PATTERN' && (recent === 'BSBS' || recent === 'SBSB')) {
+        const lastChar = pattern[0];
+        predictionSize = lastChar === 'B' ? 'SMALL' : 'BIG';
+        confidence = 85;
+        method = 'ZIGZAG_RIDE';
     }
 
-    // Number prediction based on selected size
+    // Strict Check: Intha defined patterns thavira vera iruntha kandippa SKIP aagum
+    if (predictionSize === 'SKIP') {
+        return {
+            size: 'SKIP',
+            number: -1,
+            confidence: 0,
+            method: 'ONLY_SPECIFIC_PATTERNS_ALLOWED'
+        };
+    }
+
+    // Number selection strictly based on BIG / SMALL pools (No colors)
     let selectedNumber = 0;
     if (predictionSize === 'BIG') {
         const bigPool = [5, 6, 7, 8, 9];
@@ -587,7 +589,7 @@ function decidePrediction(list, level, userId) {
         const smallPool = [0, 1, 2, 3, 4];
         selectedNumber = smallPool[Math.floor(Math.random() * smallPool.length)];
     } else {
-        selectedNumber = -1; // For SKIP
+        selectedNumber = -1;
     }
 
     return { 
@@ -607,7 +609,7 @@ function updateAfterResult(userId, wasWin) {
 
     state.mode = "NORMAL";
     state.recoveryCount = 0;
-        }
+}
 async function handleWin(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     const amt = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
