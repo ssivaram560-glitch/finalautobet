@@ -498,7 +498,7 @@ return false;
 //  LOGIC
 // ============================================================
 function getBigSmall(num) {
-    return num >= 5 ? 'BIG' : 'SMALL';
+    return num >= 5 ? 'B' : 'S';
 }
 
 function getBSPattern(list) {
@@ -530,61 +530,64 @@ function decidePrediction(list, level, userId) {
     let confidence = 75;
     let method = 'NORMAL';
 
-    if (state.history && state.history.length > 0) {
+    // 1. Skip Condition for unpredictable patterns like S, S, B, B
+    if (pattern.startsWith('SSBB') || pattern.startsWith('BBSS') || pattern.startsWith('SSBBSS') || pattern.startsWith('BBSSBB')) {
+        return {
+            size: 'SKIP',
+            number: -1,
+            confidence: 0,
+            method: 'PATTERN_SKIP_SSBB'
+        };
+    }
+
+    // 2. Dragon Zone & Streak Ride (Dragon la loss varra varaikkum ride panrathu)
+    if (streak.count >= 4) {
+        // Continue same side in dragon until it breaks/losses
+        predictionSize = streak.char === 'B' ? 'BIG' : 'SMALL';
+        confidence = 88;
+        method = 'DRAGON_RIDE_' + streak.count + 'X';
+    } 
+    // 3. Loss Recovery & Pattern Switching (B, S, B, S -> Loss -> Switch flow)
+    else if (state.history && state.history.length > 0) {
         const lastResult = state.history[state.history.length - 1];
         if (lastResult === 'L') {
-            const actualLastNum = parseInt(list[0].number || list[0].winNumber || 0);
-            predictionSize = getBigSmall(actualLastNum) === 'BIG' ? 'SMALL' : 'BIG';
-            confidence = 88;
-            method = 'P3_RECOVERY';
+            // If previous failed, switch/alternate based on loss sequence
+            const lastActualNum = parseInt(list[0].number || list[0].winNumber || 0);
+            const lastActualSize = getBigSmall(lastActualNum);
+            
+            // Alternate logic as requested
+            predictionSize = lastActualSize === 'BIG' ? 'SMALL' : 'BIG';
+            confidence = 85;
+            method = 'LOSS_RECOVERY_SWITCH';
         }
     }
 
+    // 4. Zigzag / Alternating Flow (B, S, B, S)
     if (method === 'NORMAL') {
-        if (pattern.startsWith('BBBSBS')) {
-            predictionSize = 'SMALL';
-            confidence = 80;
-            method = 'TREND_INJECTION_BBBSBS';
-        } else if (pattern.startsWith('SSSBSB')) {
-            predictionSize = 'BIG';
-            confidence = 80;
-            method = 'TREND_INJECTION_SSSBSB';
-        }
-    }
-
-    if (method === 'NORMAL') {
-        if (streak.count === 4) {
-            predictionSize = streak.char === 'B' ? 'SMALL' : 'BIG';
-            confidence = 86;
-            method = 'STREAK_4X_REVERSE';
-        } else if (streak.count >= 6) {
-            predictionSize = streak.char === 'B' ? 'SMALL' : 'BIG';
-            confidence = 90;
-            method = 'DRAGON_ZONE_6X';
-        } else if (streak.count >= 5) {
-            predictionSize = streak.char === 'B' ? 'BIG' : 'SMALL';
+        const recent = pattern.slice(0, 4); // Check recent alternating
+        if (recent === 'BSBS' || recent === 'SBSB') {
+            const lastChar = pattern[0];
+            predictionSize = lastChar === 'B' ? 'SMALL' : 'BIG';
             confidence = 82;
-            method = 'STREAK_5X_RIDE';
+            method = 'ZIGZAG_RIDE';
+        } else {
+            // Default fallback based on latest trend
+            predictionSize = pattern[0] === 'B' ? 'BIG' : 'SMALL';
+            confidence = 78;
+            method = 'TREND_DEFAULT';
         }
     }
 
-    if (method === 'NORMAL') {
-        if (streak.count >= 2 && streak.count <= 8) {
-            confidence = Math.floor(Math.random() * (96 - 82 + 1)) + 82;
-            predictionSize = Math.random() > 0.5 ? 'BIG' : 'SMALL';
-            method = 'BUNNY_AI_CYCLE';
-        }
-    }
-
-    confidence = Math.min(96, Math.max(55, confidence));
-
+    // Number prediction based on selected size
     let selectedNumber = 0;
     if (predictionSize === 'BIG') {
         const bigPool = [5, 6, 7, 8, 9];
         selectedNumber = bigPool[Math.floor(Math.random() * bigPool.length)];
-    } else {
+    } else if (predictionSize === 'SMALL') {
         const smallPool = [0, 1, 2, 3, 4];
         selectedNumber = smallPool[Math.floor(Math.random() * smallPool.length)];
+    } else {
+        selectedNumber = -1; // For SKIP
     }
 
     return { 
@@ -604,48 +607,21 @@ function updateAfterResult(userId, wasWin) {
 
     state.mode = "NORMAL";
     state.recoveryCount = 0;
-}
-function getStatus(userId) {
-    initUser(userId);
-    const state = userStates[userId];
-    const hist = state.history.join(',') || "EMPTY";
-    return `NORMAL | History: [${hist}]`;
-}
-
-
-function shouldBet(userId) {
-    initUser(userId);
-    const state = userStates[userId];
-    const histStr = state.history.join(',');
-    
-    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
-    // Intha pattern vantha mattum thaan bet kattum
-    return /L,W,W,W,W,W,L$/.test(histStr);
-}
-
-
-
+        }
 async function handleWin(userId, chatId, actual, num) {
-    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
+    const amt = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
     
     // --- CORRECT PROFIT CALCULATION ---
     let contractAmt = amt * 0.98; // 2% fee poga meethi
-    let winAmt = 0;
-    
-    // 0 illa 5 vantha 1.5x, mathapadi 2x
-    if (num === 0 || num === 5) {
-        winAmt = contractAmt * 1.5;
-    } else {
-        winAmt = contractAmt * 2;
-    }
+    let winAmt = contractAmt * 0.98; // Win aanathum 0.98 la multiply panrathu
     
     let profit = winAmt - amt; // Net Profit
     // ----------------------------------
 
-    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
-    st.level=1;st.inMart=false;st.consecutiveLoss=0;
+    pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++; pt.lossStreak = 0; if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
+    st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
     
     await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -654,13 +630,13 @@ async function handleWin(userId, chatId, actual, num) {
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
 "║ Profit : +₹"+profit.toFixed(2)+"\n"+
-"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"║ P&L    : "+(pt.pnl >= 0 ? "+" : "")+pt.pnl.toFixed(2)+"\n"+
 "║ Streak : "+pt.winStreak+" wins\n"+
 "║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
-    await sendSticker(chatId,WIN_STICKER);
+    await sendSticker(chatId, WIN_STICKER);
 }
 
 
