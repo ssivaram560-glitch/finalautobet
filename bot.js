@@ -514,6 +514,11 @@ function decidePrediction(list, level, userId) {
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
     let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
+    
+    // RECOVERY மோட்ல மட்டும் ஆப்போசிட் பண்ணுவோம்
+    if (state.mode === 'RECOVERY') {
+        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
+    }
 
     return { 
         type: 'SIZE', 
@@ -524,16 +529,71 @@ function decidePrediction(list, level, userId) {
 }
 
 function updateAfterResult(userId, wasWin) {
-    initUser(userId);
+    initState(userId);
     const state = userStates[userId];
 
-    // AI win/loss history-ah push pannuvom
+    // 1. ரிசல்ட்டை சேர்
+    if (!state.history) state.history = [];
     state.history.push(wasWin ? 'W' : 'L');
-    if (state.history.length > 10) state.history.shift();
+    
+    // 2. பேட்டர்ன் மேட்ச் ஆகுதான்னு செக் பண்ணு
+    const histStr = state.history.join(',');
 
-    // Mode eppovum NORMAL-la thaan irukkum
-    state.mode = "NORMAL";
-    state.recoveryCount = 0;
+    // A. RECOVERY பேட்டர்ன் செக்
+    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
+                              histStr.endsWith('W,W,W,L') || 
+                              /(L,L,L,L+)/.test(histStr);
+
+    // B. NORMAL பேட்டர்ன் செக்
+    const isNormalPattern = histStr.endsWith('W,L') || 
+                            /(W,W,W,W+),L$/.test(histStr);
+
+    // 3. பேட்டர்ன் மேட்ச் ஆனா பெட் முடிஞ்சது (Win or Loss), 
+    // இப்போ ஹிஸ்ட்ரியை அழிச்சு பிரஷ்ஷா மாத்து
+    if (isRecoveryPattern || isNormalPattern) {
+        
+        // RECOVERY மோடுல வின் பண்ணிட்டா நார்மலுக்கு வா
+        if (state.mode === "RECOVERY" && wasWin) {
+            state.mode = "NORMAL";
+        } 
+        // பேட்டர்ன் சிக்கிடுச்சுனா மோடு செட் பண்ணு
+        else if (isRecoveryPattern) {
+            state.mode = "RECOVERY";
+        } else {
+            state.mode = "NORMAL";
+        }
+
+        // <<< இங்கதான் மேஜிக்: பேட்டர்ன் முடிஞ்சதும் ஹிஸ்ட்ரியை காலி பண்ணு >>>
+        state.history = []; 
+        console.log(`[DEBUG] Pattern matched! History cleared. Fresh start.`);
+    }
+    
+    // 10-க்கு மேல போனா மட்டும் ஷிப்ட் பண்ணு (பாதுகாப்புக்கு)
+    if (state.history.length > 10) state.history.shift();
+}
+// 2. பெட் கட்டலாமா வேண்டாமா என முடிவு செய்யும் பங்க்ஷன்
+function shouldBet(userId) {
+    initState(userId);
+    const state = userStates[userId];
+    
+    if (!state.history || state.history.length === 0) return false;
+
+    const histStr = state.history.join(',');
+    console.log(`[DEBUG] Current History: ${histStr} | Mode: ${state.mode}`);
+
+    // RECOVERY பேட்டர்ன்கள்
+    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
+                              histStr.endsWith('W,W,W,L') || 
+                              /(L,L,L,L+)/.test(histStr);
+
+    // NORMAL பேட்டர்ன்கள்
+    const isNormalPattern = histStr.endsWith('W,L') || 
+                            /(W,W,W,W+),L$/.test(histStr);
+
+    const result = (state.mode === 'RECOVERY' || isRecoveryPattern || isNormalPattern);
+    
+    console.log(`[DEBUG] Should Bet: ${result}`);
+    return result;
 }
 
 function getStatus(userId) {
