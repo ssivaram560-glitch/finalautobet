@@ -497,83 +497,32 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-/ ============================================================
-//  PREDICTION LOGIC (SIVA AI CORE)
-// ============================================================
-
-
-function decidePrediction(list, currentLevel, userId) {
-    
-    if (!list || list.length < 2) {
-        return null;
-    }
-
-    initState(userId);
+function decidePrediction(list, level, userId) {
+    initUser(userId);
     const state = userStates[userId];
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L3+: FORCED WIN
-    // ═════════════════════════════════════════════════════════════════════
-    // ═════════════════════════════════════════════════════════════════════
-    //  L3+: FORCED WIN / HIGH LEVEL LOGIC
-    // ═════════════════════════════════════════════════════════════════════
-    if (currentLevel >= 3) {
-        // High level-ல ரிஸ்க் குறைக்க ஆப்போசிட் அல்லது ஸ்பெஷல் கண்டிஷன்
-        // உங்களது Strategy-க்கு ஏற்றபடி இதை மாற்றிக்கொள்ளலாம்
-        let forcedPrediction = (currentResult % 2 === 0) ? 'BIG' : 'SMALL';
-        return { 
-            type: 'SIZE', 
-            val: forcedPrediction, 
-            conf: 95, 
-            pat: 'FORCED_L' + currentLevel 
-        };
-    }
-
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L1-L2: NORMAL OR RECOVERY MODE
-    // ═════════════════════════════════════════════════════════════════════
-
-    const currentPeriod = String(list[0].issueNumber);
+    const currentPeriod = list[0].issueNumber;
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
-
-// Previous result 0னா prediction வேண்டாம்
-if (currentResult === 0) {
-    return null;
-}
-
-    // STEP 1: Calculate next period
     const nextPeriodNum = BigInt(currentPeriod) + 1n;
     const nextPeriod = nextPeriodNum.toString();
     const nextLast3Num = parseInt(nextPeriod.slice(-3));
 
-    // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
     const answer = nextLast3Num * Math.exp(currentResult);
-
-    // STEP 3: Get 14 digits (remove decimal, take first 14)
     const answerStr = answer.toString();
     const noDecimal = answerStr.replace('.', '');
     const first14 = noDecimal.substring(0, 14);
-
-    // STEP 4: Get last digit
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
-    // STEP 5: Apply logic based on MODE
     let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
-
-    // RECOVERY மோட்ல மட்டும் ஆப்போசிட் பண்ணுவோம்
-    if (state.mode === 'RECOVERY') {
-        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
-    }
 
     return { 
         type: 'SIZE', 
         val: prediction, 
-        conf: 90, 
+        conf: 99, 
         pat: state.mode 
     };
 }
+
 
 // 1. ரிசல்ட் வந்த பிறகு மோடை அப்டேட் செய்யும் பங்க்ஷன்
 function updateAfterResult(userId, wasWin) {
@@ -615,67 +564,43 @@ function updateAfterResult(userId, wasWin) {
         state.history = []; 
         console.log(`[DEBUG] Pattern matched! History cleared. Fresh start.`);
     }
-    
-    // 10-க்கு மேல போனா மட்டும் ஷிப்ட் பண்ணு (பாதுகாப்புக்கு)
-    if (state.history.length > 10) state.history.shift();
-}
-// 2. பெட் கட்டலாமா வேண்டாமா என முடிவு செய்யும் பங்க்ஷன்
-function shouldBet(userId) {
-    initState(userId);
-    const state = userStates[userId];
-    
-    if (!state.history || state.history.length === 0) return false;
 
-    const histStr = state.history.join(',');
-    console.log(`[DEBUG] Current History: ${histStr} | Mode: ${state.mode}`);
-
-    // RECOVERY பேட்டர்ன்கள்
-    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
-                              histStr.endsWith('W,W,W,L') || 
-                              /(L,L,L,L+)/.test(histStr);
-
-    // NORMAL பேட்டர்ன்கள்
-    const isNormalPattern = histStr.endsWith('W,L') || 
-                            /(W,W,W,W+),L$/.test(histStr);
-
-    const result = (state.mode === 'RECOVERY' || isRecoveryPattern || isNormalPattern);
-    
-    console.log(`[DEBUG] Should Bet: ${result}`);
-    return result;
-}
-
-// 3. ஆட்டோ பெட் செட்டிங்ஸ் செக்கர்
-function shouldBetNow(userId) {
-    const cfg = autobetCfg[userId];
-    const st = autobetState[userId];
-    if (!cfg || !cfg.enabled) return false;
-    if (st && st.inMart) return true;
-    if (cfg.watch && st && st.consecutiveLoss < cfg.watchLoss) return false;
-    return true;
-}
-
-// 4. ஸ்டேட்டஸ் காட்டும் பங்க்ஷன்
 function getStatus(userId) {
-    initState(userId);
+    initUser(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY`;
+    const hist = state.history.join(',') || "EMPTY";
+    return `NORMAL | History: [${hist}]`;
 }
+
+
+function shouldBet(userId) {
+    initUser(userId);
+    const state = userStates[userId];
+    const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /L,W,W,W,W,W,L$/.test(histStr);
+}
+
 
 
 async function handleWin(userId, chatId, actual, num) {
-    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
-    const amt = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
     
     // --- CORRECT PROFIT CALCULATION ---
     let contractAmt = amt * 0.98; // 2% fee poga meethi
-    let winAmt = contractAmt * 0.98; // Win aanathum 0.98 la multiply panrathu
+    let winAmt = 0;
+    
+    
     
     let profit = winAmt - amt; // Net Profit
     // ----------------------------------
 
-    pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++; pt.lossStreak = 0; if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
-    st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
+    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
+    st.level=1;st.inMart=false;st.consecutiveLoss=0;
     
     await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -684,13 +609,13 @@ async function handleWin(userId, chatId, actual, num) {
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
 "║ Profit : +₹"+profit.toFixed(2)+"\n"+
-"║ P&L    : "+(pt.pnl >= 0 ? "+" : "")+pt.pnl.toFixed(2)+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "║ Streak : "+pt.winStreak+" wins\n"+
 "║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
-    await sendSticker(chatId, WIN_STICKER);
+    await sendSticker(chatId,WIN_STICKER);
 }
 
 
