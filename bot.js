@@ -500,18 +500,7 @@ return false;
 / ============================================================
 //  PREDICTION LOGIC (SIVA AI CORE)
 // ============================================================
-let userStates = {};
 
-function initState(userId) {
-    if (!userStates[userId]) {
-   userStates[userId] = {
-    mode: "NORMAL",
-    recoveryCount: 0,
-    winBeforeLoss: 0,
-    lossStreak: 0
-};
-    }
-}
 
 function decidePrediction(list, currentLevel, userId) {
     
