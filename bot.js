@@ -496,24 +496,13 @@ return false;
 
 // ============================================================
 //  LOGIC
-// ============================================================
-// Global user states storage
-// Safely declare userStates so it won't throw duplicate declaration errors
-// Safe global declaration to prevent duplicate identifier errors
-if (typeof window !== 'undefined' && !window.userStates) {
-    window.userStates = {};
-} else if (typeof global !== 'undefined' && !global.userStates) {
-    global.userStates = {};
-}
-
-const userStates = (typeof window !== 'undefined' ? window.userStates : null) || 
-                   (typeof global !== 'undefined' ? global.globalStates : {}) || 
-                   {};
+// Complete safe initialization avoiding redeclaration errors
+var userStates = userStates || (typeof window !== 'undefined' ? window.userStates : null) || {};
 
 function initUser(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            mode: "NORMAL", // 'NORMAL' or 'RECOVERY'
+            mode: "NORMAL",
             history: [],
             recoveryCount: 0
         };
@@ -537,13 +526,9 @@ function decidePrediction(list, level, userId) {
     const first14 = noDecimal.substring(0, 14);
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
-    // Base calculation
     let basePrediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
     let finalPrediction = basePrediction;
 
-    // Apply Mode Rules:
-    // NORMAL mode: 0-4 = SMALL, 5-9 = BIG
-    // RECOVERY mode: 0-4 = BIG, 5-9 = SMALL (Inverse)
     if (state.mode === "RECOVERY") {
         finalPrediction = basePrediction === 'SMALL' ? 'BIG' : 'SMALL';
     }
@@ -560,13 +545,11 @@ function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
 
-    // Push result to history
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 20) state.history.shift();
 
     const histStr = state.history.join(',');
 
-    // Pattern Analysis strictly in NORMAL mode
     if (state.mode === "NORMAL") {
         const isFourPlusWins = /(?:^|,)(W(?:,W)+)(?:,|$)/.test(histStr) && 
                                (histStr.match(/W/g) || []).length >= 4;
@@ -592,7 +575,6 @@ function updateAfterResult(userId, wasWin) {
 
         const matchedRecovery = recoveryPatterns.some(pattern => pattern.test(histStr));
 
-        // Switch back to NORMAL if won, patterns matched, or hit max recovery limit (3 steps)
         if (wasWin || matchedRecovery || state.recoveryCount >= 3) {
             state.mode = "NORMAL";
             state.history = [];
@@ -610,7 +592,7 @@ function getStatus(userId) {
 
 function shouldBet(userId) {
     initUser(userId);
-    return true; // Always bet as requested
+    return true;
 }
 
 async function handleWin(userId, chatId, actual, num) {
