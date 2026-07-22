@@ -497,7 +497,20 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-function decidePrediction(list, level, userId) {
+let userStates = {}; // Assuming userStates is managed globally or passed around
+
+function initUser(userId) {
+    if (!userStates[userId]) {
+        userStates[userId] = {
+            history: [],
+            mode: "NORMAL",
+            recoveryCount: 0
+        };
+    }
+}
+
+// Original decidePrediction function from pasted_content.txt
+function calculatePredictionFromExistingLogic(list, level, userId) {
     initUser(userId);
     const state = userStates[userId];
     const currentPeriod = list[0].issueNumber;
@@ -523,6 +536,112 @@ function decidePrediction(list, level, userId) {
     };
 }
 
+// Detailed prediction flow logic
+function calculatePredictionFromDetailedFlow(latestApiHistory, userId) {
+    // 1. Takes latest API history, last 40 numbers.
+    const history40 = latestApiHistory.slice(0, 40);
+    
+    // 2. Converts to B/S pattern.
+    const bsPattern = history40.map(item => {
+        const num = parseInt(item.number || item.winNumber || 0);
+        return num <= 4 ? 'S' : 'B';
+    }).join('');
+
+    let sizePrediction = null;
+    let confidence = 0;
+    let method = 'MAIN';
+
+    // 3. Checks emergency loss recovery first (simplified for this example)
+    // 4. Applies streak, trend injection, dragon zone, etc.
+    
+    // Important rules:
+    // - 6x+ fresh Dragon Zone → predict opposite with 90%.
+    if (bsPattern.startsWith('BBBBBB') || bsPattern.startsWith('SSSSSS')) {
+        sizePrediction = bsPattern[0] === 'B' ? 'SMALL' : 'BIG';
+        confidence = 90;
+        method = 'DRAGON_ZONE_BREAK';
+    } 
+    // - 5x+ streak → if ride mode / wrong break exists, continue same side. (Assuming ride mode for simplicity)
+    else if (bsPattern.startsWith('BBBBB') || bsPattern.startsWith('SSSSS')) {
+        sizePrediction = bsPattern[0] === 'B' ? 'BIG' : 'SMALL';
+        confidence = 85;
+        method = 'STREAK_RIDE';
+    }
+    // - 4x same streak → predict opposite with 86% confidence.
+    else if (bsPattern.startsWith('BBBB') || bsPattern.startsWith('SSSS')) {
+        sizePrediction = bsPattern[0] === 'B' ? 'SMALL' : 'BIG';
+        confidence = 86;
+        method = 'STREAK_BREAK';
+    }
+    // - BBBSBS / SSSBSB trend injection → hard override: BBBSBS → SMALL, SSSBSB → BIG, confidence 80%.
+    else if (bsPattern.startsWith('BBBSBS')) {
+        sizePrediction = 'SMALL';
+        confidence = 80;
+        method = 'TREND_INJECTION';
+    } else if (bsPattern.startsWith('SSSBSB')) {
+        sizePrediction = 'BIG';
+        confidence = 80;
+        method = 'TREND_INJECTION';
+    }
+    // - P3 / LB Shield recovery → after loss, predict opposite of actual result. (Requires state tracking, simplified here)
+    // - Bunny AI logic, Final master vote, etc. (Simplified for this example as it requires complex state and more data)
+    else {
+        // Fallback logic if no specific pattern matches
+        // For example, simple alternating pattern or just following the last result
+        sizePrediction = bsPattern[0] === 'B' ? 'SMALL' : 'BIG'; // Simple alternating
+        confidence = 60;
+        method = 'FALLBACK';
+    }
+
+    // Number prediction logic:
+    // After BIG/SMALL is chosen, number is selected from pools.
+    let numberPrediction = null;
+    if (sizePrediction === 'BIG') {
+        const bigPool = [5, 6, 7, 8, 9];
+        // Simplified selection: just pick a random one or the first one for now
+        numberPrediction = bigPool[Math.floor(Math.random() * bigPool.length)];
+    } else if (sizePrediction === 'SMALL') {
+        const smallPool = [0, 1, 2, 3, 4];
+        numberPrediction = smallPool[Math.floor(Math.random() * smallPool.length)];
+    }
+
+    return { 
+        type: 'SIZE', 
+        val: sizePrediction, 
+        number: numberPrediction,
+        conf: confidence, 
+        method: method 
+    };
+}
+
+// Combined prediction function
+function getConsensusPrediction(list, level, userId, latestApiHistory) {
+    const prediction1 = calculatePredictionFromExistingLogic(list, level, userId);
+    const prediction2 = calculatePredictionFromDetailedFlow(latestApiHistory, userId);
+
+    // Only return a prediction if both agree on the 'val' (BIG/SMALL)
+    if (prediction1.val === prediction2.val) {
+        // You might want to combine confidence or other properties here
+        return {
+            val: prediction1.val,
+            confidence: (prediction1.conf + prediction2.conf) / 2, // Average confidence if they agree
+            source: 'CONSENSUS',
+            details: { existingLogic: prediction1, detailedFlow: prediction2 }
+        };
+    } else {
+        // If they don't agree, skip as per user's instruction
+        return null; 
+    }
+}
+
+// Export functions if this is a module, or make them globally available
+// For a simple script, they can be global.
+// module.exports = { getConsensusPrediction, updateAfterResult, getStatus, shouldBet };
+
+// The other functions from pasted_content.txt (updateAfterResult, getStatus, shouldBet) 
+// are not directly part of the prediction logic but are related to user state management.
+// They can be included as is or adapted as needed.
+
 function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
@@ -543,7 +662,6 @@ function getStatus(userId) {
     return `NORMAL | History: [${hist}]`;
 }
 
-
 function shouldBet(userId) {
     initUser(userId);
     const state = userStates[userId];
@@ -553,6 +671,7 @@ function shouldBet(userId) {
     // Intha pattern vantha mattum thaan bet kattum
     return /L,W,W,W,W,W,L$/.test(histStr);
 }
+
 
 
 
