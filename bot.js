@@ -592,21 +592,20 @@ function shouldBet(userId) {
 
 
 async function handleWin(userId, chatId, actual, num) {
-    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+async function handleWin(userId, chatId, actual, num) {
+    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
+    const amt = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
     
     // --- CORRECT PROFIT CALCULATION ---
     let contractAmt = amt * 0.98; // 2% fee poga meethi
-    let winAmt = 0;
-    
-    
+    let winAmt = contractAmt * 2; // Size/Color win na 2x return varum (or adjust based on your game payout)
     
     let profit = winAmt - amt; // Net Profit
     // ----------------------------------
 
-    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
-    st.level=1;st.inMart=false;st.consecutiveLoss=0;
+    pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++; pt.lossStreak = 0; if(pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
+    st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
     
     await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -615,15 +614,14 @@ async function handleWin(userId, chatId, actual, num) {
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
 "║ Profit : +₹"+profit.toFixed(2)+"\n"+
-"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"║ P&L    : "+(pt.pnl >= 0 ? "+" : "")+pt.pnl.toFixed(2)+"\n"+
 "║ Streak : "+pt.winStreak+" wins\n"+
 "║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
-    await sendSticker(chatId,WIN_STICKER);
+    await sendSticker(chatId, WIN_STICKER);
 }
-
 
 async function handleLoss(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
