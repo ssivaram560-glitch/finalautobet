@@ -497,119 +497,169 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-function getBigSmall(num) {
-    return num >= 5 ? 'B' : 'S';
-}
+/ ============================================================
+//  PREDICTION LOGIC (SIVA AI CORE)
+// ============================================================
+let userStates = {};
 
-function getBSPattern(list) {
-    return list.slice(0, 40).map(item => {
-        const num = parseInt(item.number || item.winNumber || 0);
-        return num >= 5 ? 'B' : 'S';
-    }).join('');
-}
-
-function getStreakInfo(pattern) {
-    if (!pattern) return { char: 'B', count: 0 };
-    let count = 0;
-    const firstChar = pattern[0];
-    for (let i = 0; i < pattern.length; i++) {
-        if (pattern[i] === firstChar) count++;
-        else break;
+function initState(userId) {
+    if (!userStates[userId]) {
+   userStates[userId] = {
+    mode: "NORMAL",
+    recoveryCount: 0,
+    winBeforeLoss: 0,
+    lossStreak: 0
+};
     }
-    return { char: firstChar, count };
 }
 
-function decidePrediction(list, level, userId) {
-    initUser(userId);
+function decidePrediction(list, currentLevel, userId) {
+    
+    if (!list || list.length < 2) {
+        return null;
+    }
+
+    initState(userId);
     const state = userStates[userId];
 
-    const pattern = getBSPattern(list);
-    const streak = getStreakInfo(pattern);
+    // ═════════════════════════════════════════════════════════════════════
+    //  L3+: FORCED WIN
+    // ═════════════════════════════════════════════════════════════════════
     
-    let predictionSize = 'SKIP';
-    let confidence = 0;
-    let method = 'SKIP_UNKNOWN_PATTERN';
 
-    // 1. Skip Condition for unpredictable patterns like S, S, B, B or B, B, S, S
-    if (pattern.startsWith('SSBB') || pattern.startsWith('BBSS') || pattern.startsWith('SSBBSS') || pattern.startsWith('BBSSBB')) {
-        return {
-            size: 'SKIP',
-            number: -1,
-            confidence: 0,
-            method: 'PATTERN_SKIP_SSBB'
-        };
-    }
 
-    // 2. Dragon Zone (Dragon la loss varra varaikkum ride panrathu)
-    if (streak.count >= 4) {
-        predictionSize = streak.char === 'B' ? 'BIG' : 'SMALL';
-        confidence = 90;
-        method = 'DRAGON_RIDE_' + streak.count + 'X';
-    } 
-    // 3. Loss Recovery & Strict Flow Logic (B,S,B,S,S -> loss -> S -> loss -> S flow)
-    else if (state.history && state.history.length > 0) {
-        const lastResult = state.history[state.history.length - 1];
-        if (lastResult === 'L') {
-            const recentResults = state.history.slice(-2);
-            if (recentResults.length >= 2 && recentResults[0] === 'L' && recentResults[1] === 'L') {
-                predictionSize = 'SMALL'; // As specified: loss -> loss -> S
-            } else {
-                predictionSize = 'SMALL'; // First loss after B,S,B,S,S
-            }
-            confidence = 85;
-            method = 'LOSS_RECOVERY_FLOW';
-        }
-    }
+    // ═════════════════════════════════════════════════════════════════════
+    //  L1-L2: NORMAL OR RECOVERY MODE
+    // ═════════════════════════════════════════════════════════════════════
 
-    // 4. Zigzag Flow (B, S, B, S - Only allow this specific pattern)
-    const recent = pattern.slice(0, 4);
-    if (method === 'SKIP_UNKNOWN_PATTERN' && (recent === 'BSBS' || recent === 'SBSB')) {
-        const lastChar = pattern[0];
-        predictionSize = lastChar === 'B' ? 'SMALL' : 'BIG';
-        confidence = 85;
-        method = 'ZIGZAG_RIDE';
-    }
+    const currentPeriod = String(list[0].issueNumber);
+    const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
-    // Strict Check: Intha defined patterns thavira vera iruntha kandippa SKIP aagum
-    if (predictionSize === 'SKIP') {
-        return {
-            size: 'SKIP',
-            number: -1,
-            confidence: 0,
-            method: 'ONLY_SPECIFIC_PATTERNS_ALLOWED'
-        };
-    }
 
-    // Number selection strictly based on BIG / SMALL pools (No colors)
-    let selectedNumber = 0;
-    if (predictionSize === 'BIG') {
-        const bigPool = [5, 6, 7, 8, 9];
-        selectedNumber = bigPool[Math.floor(Math.random() * bigPool.length)];
-    } else if (predictionSize === 'SMALL') {
-        const smallPool = [0, 1, 2, 3, 4];
-        selectedNumber = smallPool[Math.floor(Math.random() * smallPool.length)];
-    } else {
-        selectedNumber = -1;
+// Previous result 0னா prediction வேண்டாம்
+if (currentResult === 0) {
+    return null;
+}
+
+    // STEP 1: Calculate next period
+    const nextPeriodNum = BigInt(currentPeriod) + 1n;
+    const nextPeriod = nextPeriodNum.toString();
+    const nextLast3Num = parseInt(nextPeriod.slice(-3));
+
+    // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
+    const answer = nextLast3Num * Math.exp(currentResult);
+
+    // STEP 3: Get 14 digits (remove decimal, take first 14)
+    const answerStr = answer.toString();
+    const noDecimal = answerStr.replace('.', '');
+    const first14 = noDecimal.substring(0, 14);
+
+    // STEP 4: Get last digit
+    const lastDigit = parseInt(first14.charAt(first14.length - 1));
+
+    // STEP 5: Apply logic based on MODE
+    let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
+
+    // RECOVERY மோட்ல மட்டும் ஆப்போசிட் பண்ணுவோம்
+    if (state.mode === 'RECOVERY') {
+        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
     }
 
     return { 
-        size: predictionSize, 
-        number: selectedNumber, 
-        confidence: confidence, 
-        method: method 
+        type: 'SIZE', 
+        val: prediction, 
+        conf: 90, 
+        pat: state.mode 
     };
 }
 
+// 1. ரிசல்ட் வந்த பிறகு மோடை அப்டேட் செய்யும் பங்க்ஷன்
 function updateAfterResult(userId, wasWin) {
-    initUser(userId);
+    initState(userId);
     const state = userStates[userId];
 
+    // 1. ரிசல்ட்டை சேர்
+    if (!state.history) state.history = [];
     state.history.push(wasWin ? 'W' : 'L');
-    if (state.history.length > 10) state.history.shift();
+    
+    // 2. பேட்டர்ன் மேட்ச் ஆகுதான்னு செக் பண்ணு
+    const histStr = state.history.join(',');
 
-    state.mode = "NORMAL";
-    state.recoveryCount = 0;
+    // A. RECOVERY பேட்டர்ன் செக்
+    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
+                              histStr.endsWith('W,W,W,L') || 
+                              /(L,L,L,L+)/.test(histStr);
+
+    // B. NORMAL பேட்டர்ன் செக்
+    const isNormalPattern = histStr.endsWith('W,L') || 
+                            /(W,W,W,W+),L$/.test(histStr);
+
+    // 3. பேட்டர்ன் மேட்ச் ஆனா பெட் முடிஞ்சது (Win or Loss), 
+    // இப்போ ஹிஸ்ட்ரியை அழிச்சு பிரஷ்ஷா மாத்து
+    if (isRecoveryPattern || isNormalPattern) {
+        
+        // RECOVERY மோடுல வின் பண்ணிட்டா நார்மலுக்கு வா
+        if (state.mode === "RECOVERY" && wasWin) {
+            state.mode = "NORMAL";
+        } 
+        // பேட்டர்ன் சிக்கிடுச்சுனா மோடு செட் பண்ணு
+        else if (isRecoveryPattern) {
+            state.mode = "RECOVERY";
+        } else {
+            state.mode = "NORMAL";
+        }
+
+        // <<< இங்கதான் மேஜிக்: பேட்டர்ன் முடிஞ்சதும் ஹிஸ்ட்ரியை காலி பண்ணு >>>
+        state.history = []; 
+        console.log(`[DEBUG] Pattern matched! History cleared. Fresh start.`);
+    }
+    
+    // 10-க்கு மேல போனா மட்டும் ஷிப்ட் பண்ணு (பாதுகாப்புக்கு)
+    if (state.history.length > 10) state.history.shift();
 }
+// 2. பெட் கட்டலாமா வேண்டாமா என முடிவு செய்யும் பங்க்ஷன்
+function shouldBet(userId) {
+    initState(userId);
+    const state = userStates[userId];
+    
+    if (!state.history || state.history.length === 0) return false;
+
+    const histStr = state.history.join(',');
+    console.log(`[DEBUG] Current History: ${histStr} | Mode: ${state.mode}`);
+
+    // RECOVERY பேட்டர்ன்கள்
+    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
+                              histStr.endsWith('W,W,W,L') || 
+                              /(L,L,L,L+)/.test(histStr);
+
+    // NORMAL பேட்டர்ன்கள்
+    const isNormalPattern = histStr.endsWith('W,L') || 
+                            /(W,W,W,W+),L$/.test(histStr);
+
+    const result = (state.mode === 'RECOVERY' || isRecoveryPattern || isNormalPattern);
+    
+    console.log(`[DEBUG] Should Bet: ${result}`);
+    return result;
+}
+
+// 3. ஆட்டோ பெட் செட்டிங்ஸ் செக்கர்
+function shouldBetNow(userId) {
+    const cfg = autobetCfg[userId];
+    const st = autobetState[userId];
+    if (!cfg || !cfg.enabled) return false;
+    if (st && st.inMart) return true;
+    if (cfg.watch && st && st.consecutiveLoss < cfg.watchLoss) return false;
+    return true;
+}
+
+// 4. ஸ்டேட்டஸ் காட்டும் பங்க்ஷன்
+function getStatus(userId) {
+    initState(userId);
+    const state = userStates[userId];
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY`;
+}
+
+
 async function handleWin(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     const amt = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
