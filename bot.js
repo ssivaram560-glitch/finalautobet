@@ -498,7 +498,11 @@ return false;
 //  LOGIC
 // ============================================================
 // Global user states storage
-const userStates = {};
+// Safely declare userStates so it won't throw duplicate declaration errors
+if (typeof globalThis.userStates === 'undefined') {
+    globalThis.userStates = {};
+}
+const userStates = globalThis.userStates;
 
 function initUser(userId) {
     if (!userStates[userId]) {
@@ -532,7 +536,7 @@ function decidePrediction(list, level, userId) {
     let finalPrediction = basePrediction;
 
     // Apply Mode Rules:
-    // NORMAL mode: 0-4 = SMALL, 5-9 = BIG (Standard)
+    // NORMAL mode: 0-4 = SMALL, 5-9 = BIG
     // RECOVERY mode: 0-4 = BIG, 5-9 = SMALL (Inverse)
     if (state.mode === "RECOVERY") {
         finalPrediction = basePrediction === 'SMALL' ? 'BIG' : 'SMALL';
@@ -558,35 +562,35 @@ function updateAfterResult(userId, wasWin) {
 
     // Pattern Analysis strictly in NORMAL mode
     if (state.mode === "NORMAL") {
-        // Pattern 1: 4 consecutive wins or more (4+W e.g., W,W,W,W)
         const isFourPlusWins = /(?:^|,)(W(?:,W)+)(?:,|$)/.test(histStr) && 
                                (histStr.match(/W/g) || []).length >= 4;
 
         if (isFourPlusWins || histStr.endsWith('W,W,W,W')) {
-            // Trigger switch to RECOVERY mode & reset normal history
             state.mode = "RECOVERY";
-            state.history = []; // Fresh history start for recovery/next cycle
+            state.history = []; 
+            state.recoveryCount = 0;
             return;
         }
     } 
     else if (state.mode === "RECOVERY") {
-        // Recovery Mode patterns to return to NORMAL or handle transitions:
-        // Patterns: W,L | W,W,L | L | 4+L | L,L | W
+        state.recoveryCount++;
+
         const recoveryPatterns = [
             /W,L$/, 
             /W,W,L$/, 
             /L$/, 
             /L,L$/, 
             /W$/,
-            /(?:^|,)(L(?:,L)+)(?:,|$)/ // 4+L or multiple losses
+            /(?:^|,)(L(?:,L)+)(?:,|$)/
         ];
 
         const matchedRecovery = recoveryPatterns.some(pattern => pattern.test(histStr));
 
-        if (wasWin || matchedRecovery) {
-            // Switch back to NORMAL mode and reset history
+        // Switch back to NORMAL if won, patterns matched, or hit max recovery limit (3 steps)
+        if (wasWin || matchedRecovery || state.recoveryCount >= 3) {
             state.mode = "NORMAL";
             state.history = [];
+            state.recoveryCount = 0;
         }
     }
 }
@@ -595,20 +599,12 @@ function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
     const hist = state.history.join(',') || "EMPTY";
-    return `${state.mode} | History: [${hist}]`;
+    return `${state.mode} | Count: ${state.recoveryCount} | History: [${hist}]`;
 }
-
-
-
 
 function shouldBet(userId) {
     initUser(userId);
-    const state = userStates[userId];
-    const histStr = state.history.join(',');
-    
-    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
-    // Intha pattern vantha mattum thaan bet kattum
-    return /L,W,W,W,W,W,L$/.test(histStr);
+    return true; // Always bet as requested
 }
 
 
