@@ -497,22 +497,6 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-// 사용자 상태 초기화 헬퍼 함수 (필요시 정의됨을 가정)
-function initUser(userId) {
-    if (!userStates[userId]) {
-        userStates[userId] = {
-            mode: "NORMAL",
-            history: []
-        };
-    }
-}
-
-// 기존 상태 초기화 함수 (오타 방지용)
-function initState(userId) {
-    initUser(userId);
-}
-
-// 1. 예측을 결정하는 함수 (항상 실행됨)
 function decidePrediction(list, level, userId) {
     initUser(userId);
     const state = userStates[userId];
@@ -539,73 +523,60 @@ function decidePrediction(list, level, userId) {
     };
 }
 
-// 2. ரிசல்ட் வந்த பிறகு மோடை அப்டேட் செய்யும் பங்க்ஷன்
 function updateAfterResult(userId, wasWin) {
-    initState(userId);
+    initUser(userId);
     const state = userStates[userId];
 
-    // 1. ரிசல்ட்டை சேர்
-    if (!state.history) state.history = [];
+    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
-    
-    // 2. பேட்டர்ன் மேட்ச் ஆகுதான்னு செக் பண்ணு
-    const histStr = state.history.join(',');
+    if (state.history.length > 10) state.history.shift();
 
-    // A. RECOVERY பேட்டர்ன் செக்
-    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
-                              histStr.endsWith('W,W,W,L') || 
-                              /(L,L,L,L+)/.test(histStr);
+    // Mode eppovum NORMAL-la thaan irukkum
+    state.mode = "NORMAL";
+    state.recoveryCount = 0;
+}
 
-    // B. NORMAL பேட்டர்ன் செக்
-    const isNormalPattern = histStr.endsWith('W,L') || 
-                            /(W,W,W,W+),L$/.test(histStr);
-
-    // 3. பேட்டர்ன் மேட்ச் ஆனா மோடை மாத்திவிட்டு ஹிஸ்ட்ரியை பிரஷ்ஷாக்கு
-    if (isRecoveryPattern || isNormalPattern) {
-        if (state.mode === "RECOVERY" && wasWin) {
-            state.mode = "NORMAL";
-        } else if (isRecoveryPattern) {
-            state.mode = "RECOVERY";
-        } else {
-            state.mode = "NORMAL";
-        }
-
-        state.history = []; 
-        console.log(`[DEBUG] Pattern matched! Mode updated to ${state.mode}. History cleared.`);
-    }
-} // <--- 닫히지 않았던 괄호 수정 완료!
-
-// 3. 현재 상태를 리턴하는 함수
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
     const hist = state.history.join(',') || "EMPTY";
-    return `${state.mode} | History: [${hist}]`;
+    return `NORMAL | History: [${hist}]`;
 }
 
-// 4. [수정됨] 항상 베팅을 하도록 true를 리턴
+
 function shouldBet(userId) {
-    // 기존의 까다로운 정규식 조건 제거 -> 항상 무조건 베팅 실행
-    return true; 
+    initUser(userId);
+    const state = userStates[userId];
+    const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /L,W,W,W,W,W,L$/.test(histStr);
 }
 
 
 
 async function handleWin(userId, chatId, actual, num) {
-async function handleWin(userId, chatId, actual, num) {
-    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
-    const amt = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
     
     // --- CORRECT PROFIT CALCULATION ---
     let contractAmt = amt * 0.98; // 2% fee poga meethi
-    let winAmt = contractAmt * 2; // Size/Color win na 2x return varum (or adjust based on your game payout)
+    let winAmt = 0;
+    
+    // 0 illa 5 vantha 1.5x, mathapadi 2x
+    if (num === 0 || num === 5) {
+        winAmt = contractAmt * 1.5;
+    } else {
+        winAmt = contractAmt * 2;
+    }
     
     let profit = winAmt - amt; // Net Profit
     // ----------------------------------
 
-    pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++; pt.lossStreak = 0; if(pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
-    st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
+    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
+    st.level=1;st.inMart=false;st.consecutiveLoss=0;
     
     await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -614,14 +585,15 @@ async function handleWin(userId, chatId, actual, num) {
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
 "║ Profit : +₹"+profit.toFixed(2)+"\n"+
-"║ P&L    : "+(pt.pnl >= 0 ? "+" : "")+pt.pnl.toFixed(2)+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "║ Streak : "+pt.winStreak+" wins\n"+
 "║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
-    await sendSticker(chatId, WIN_STICKER);
+    await sendSticker(chatId,WIN_STICKER);
 }
+
 
 async function handleLoss(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
@@ -778,96 +750,72 @@ async function runPredict(userId, chatId) {
 //  RESULT CHECKER
 // ============================================================
 
-async function checkResult(userId, chatId, iv, target, predicted, predType, wasReal, cfg, pt, st, stats, running) {
-    // 1. Timeout Check & Handling
-    // (Note: If this part is inside an interval callback, make sure its placement matches your function structure)
+async function checkResult(userId, chatId, target, predicted, predType) {
+    let tries=0;
+    const cfg=autobetCfg[userId],st=autobetState[userId],pt=profitTrack[userId];
+    const wasReal=cfg.enabled ;
     
-    const list = await fetchList(); 
-    if (!list || !list.length) return;
-    
-    if (BigInt(list[0].issueNumber) < BigInt(target)) return;
-    clearInterval(iv);
+    const iv=setInterval(async()=>{
+        if(!running[userId])return clearInterval(iv);
+        if(++tries>20){
+            clearInterval(iv);
+            await logBoth(chatId, "⏱ Timeout — next...");
+            setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},3000);
+            return;
+        }
+        const list=await fetchList();if(!list)return;
+        if(BigInt(list[0].issueNumber)<BigInt(target))return;
+        clearInterval(iv);
 
-    // 2. Safe Extraction & Number Parsing (Fixed to prevent undefined/null crashes)
-    const res = list.find(i => i.issueNumber === target) || list[0];
-    const rawNum = res ? (res.number ?? res.winNumber ?? 0) : 0;
-    const num = parseInt(rawNum, 10) || 0;
+        const res=list.find(i=>i.issueNumber===target)||list[0];
+        const num=parseInt(res.number||res.winNumber||0);
+        let actual;
+        if(predType==="SIZE")actual=num>=5?"BIG":"SMALL";
+        else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
+        const win = predicted === actual;
 
-    // 3. Result Calculation
-    let actual;
-    if (predType === "SIZE") {
-        actual = num >= 5 ? "BIG" : "SMALL";
-    } else {
-        actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
-    }
-    
-    const win = predicted === actual;
+        updateAfterResult(userId, win);
 
-    // 4. Update Stats
-    updateAfterResult(userId, win);
+        const s = stats[userId];
+        s.total++;
+        if(win){s.win++;s.winStreak++;s.lossStreak=0;if(s.winStreak>s.maxWinStreak)s.maxWinStreak=s.winStreak;}
+        else{s.loss++;s.lossStreak++;s.winStreak=0;if(s.lossStreak>s.maxLossStreak)s.maxLossStreak=s.lossStreak;}
 
-    if (!stats[userId]) {
-        stats[userId] = { total: 0, win: 0, loss: 0, winStreak: 0, lossStreak: 0, maxWinStreak: 0, maxLossStreak: 0 };
-    }
-    
-    const s = stats[userId];
-    s.total++;
-    if (win) { 
-        s.win++; 
-        s.winStreak++; 
-        s.lossStreak = 0; 
-        if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak; 
-    } else { 
-        s.loss++; 
-        s.lossStreak++; 
-        s.winStreak = 0; 
-        if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak; 
-    }
+        if(cfg.enabled && wasReal){
+            if(win) await handleWin(userId,chatId,actual,num);
+            else    await handleLoss(userId,chatId,actual,num);
 
-    // 5. Notifications & Target Logic
-    if (cfg.enabled && wasReal) {
-        if (win) {
-            await handleWin(userId, chatId, actual, num);
+            // --- NEW: PROFIT STOP & RESTART LOGIC ---
+            if (pt.pnl >= cfg.targetProfit) {
+                st.isWaiting = true;// Intha line-ah mathunga:
+st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calculation
+
+                const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
+                await send(chatId, 
+                    "🎯 TARGET REACHED!\n" +
+                    "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
+                    "🛑 Bot Paused.\n" +
+                    "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
+                    "🔄 Next Section: " + restartTimeStr
+                );
+            }
+
+        } else if (cfg.enabled && !wasReal) {
+            if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
+            else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
         } else {
-            await handleLoss(userId, chatId, actual, num);
+            if(win){
+                await send(chatId,"✅ WIN! #"+num+" "+actual+"\n🔥 "+s.winStreak+" streak");
+                await sendSticker(chatId,WIN_STICKER);
+            } else {
+                await send(chatId,"❌ LOSS #"+num+" "+actual+"\n💔 "+s.lossStreak+" loss");
+                await sendSticker(chatId,LOSS_STICKER);
+            }
         }
-
-        // --- PROFIT STOP & RESTART LOGIC ---
-        if (pt && pt.pnl >= cfg.targetProfit) {
-            st.isWaiting = true;
-            st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 60 * 1000); // Hours calculation
-
-            const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
-            await send(chatId, 
-                "🎯 TARGET REACHED!\n" +
-                "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
-                "🛑 Bot Paused.\n" +
-                "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
-                "🔄 Next Section: " + restartTimeStr
-            );
-        }
-
-    } else if (cfg.enabled && !wasReal) {
-        if (win) {
-            await send(chatId, "👀 Watch ✅ Correct! (No bet placed)");
-        } else {
-            await send(chatId, "👀 Watch ❌ Incorrect! (No bet placed)");
-        }
-    } else {
-        if (win) {
-            await send(chatId, "✅ WIN! #" + num + " " + actual + "\n🔥 " + s.winStreak + " streak");
-            if (typeof WIN_STICKER !== 'undefined') await sendSticker(chatId, WIN_STICKER);
-        } else {
-            await send(chatId, "❌ LOSS #" + num + " " + actual + "\n💔 " + s.lossStreak + " loss");
-            if (typeof LOSS_STICKER !== 'undefined') await sendSticker(chatId, LOSS_STICKER);
-        }
-    }
-
-    // 6. Continue Loop
-    setTimeout(() => { 
-        if (running[userId]) runPredict(userId, chatId); 
-    }, 8000);
+        setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},8000);
+    },10000);
 }
+
 
 // ============================================================
 //  STATS
