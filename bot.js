@@ -497,9 +497,23 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
+// Global user states storage
+const userStates = {};
+
+function initUser(userId) {
+    if (!userStates[userId]) {
+        userStates[userId] = {
+            mode: "NORMAL", // 'NORMAL' or 'RECOVERY'
+            history: [],
+            recoveryCount: 0
+        };
+    }
+}
+
 function decidePrediction(list, level, userId) {
     initUser(userId);
     const state = userStates[userId];
+    
     const currentPeriod = list[0].issueNumber;
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
@@ -513,11 +527,20 @@ function decidePrediction(list, level, userId) {
     const first14 = noDecimal.substring(0, 14);
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
-    let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
+    // Base calculation
+    let basePrediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
+    let finalPrediction = basePrediction;
+
+    // Apply Mode Rules:
+    // NORMAL mode: 0-4 = SMALL, 5-9 = BIG (Standard)
+    // RECOVERY mode: 0-4 = BIG, 5-9 = SMALL (Inverse)
+    if (state.mode === "RECOVERY") {
+        finalPrediction = basePrediction === 'SMALL' ? 'BIG' : 'SMALL';
+    }
 
     return { 
         type: 'SIZE', 
-        val: prediction, 
+        val: finalPrediction, 
         conf: 99, 
         pat: state.mode 
     };
@@ -527,21 +550,55 @@ function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
 
-    // AI win/loss history-ah push pannuvom
+    // Push result to history
     state.history.push(wasWin ? 'W' : 'L');
-    if (state.history.length > 10) state.history.shift();
+    if (state.history.length > 20) state.history.shift();
 
-    // Mode eppovum NORMAL-la thaan irukkum
-    state.mode = "NORMAL";
-    state.recoveryCount = 0;
+    const histStr = state.history.join(',');
+
+    // Pattern Analysis strictly in NORMAL mode
+    if (state.mode === "NORMAL") {
+        // Pattern 1: 4 consecutive wins or more (4+W e.g., W,W,W,W)
+        const isFourPlusWins = /(?:^|,)(W(?:,W)+)(?:,|$)/.test(histStr) && 
+                               (histStr.match(/W/g) || []).length >= 4;
+
+        if (isFourPlusWins || histStr.endsWith('W,W,W,W')) {
+            // Trigger switch to RECOVERY mode & reset normal history
+            state.mode = "RECOVERY";
+            state.history = []; // Fresh history start for recovery/next cycle
+            return;
+        }
+    } 
+    else if (state.mode === "RECOVERY") {
+        // Recovery Mode patterns to return to NORMAL or handle transitions:
+        // Patterns: W,L | W,W,L | L | 4+L | L,L | W
+        const recoveryPatterns = [
+            /W,L$/, 
+            /W,W,L$/, 
+            /L$/, 
+            /L,L$/, 
+            /W$/,
+            /(?:^|,)(L(?:,L)+)(?:,|$)/ // 4+L or multiple losses
+        ];
+
+        const matchedRecovery = recoveryPatterns.some(pattern => pattern.test(histStr));
+
+        if (wasWin || matchedRecovery) {
+            // Switch back to NORMAL mode and reset history
+            state.mode = "NORMAL";
+            state.history = [];
+        }
+    }
 }
 
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
     const hist = state.history.join(',') || "EMPTY";
-    return `NORMAL | History: [${hist}]`;
+    return `${state.mode} | History: [${hist}]`;
 }
+
+
 
 
 function shouldBet(userId) {
