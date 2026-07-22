@@ -779,73 +779,95 @@ async function runPredict(userId, chatId) {
 // ============================================================
 
 async function checkResult(userId, chatId, iv, target, predicted, predType, wasReal, cfg, pt, st, stats, running) {
-    await logBoth(chatId, "⏱ Timeout — next...");
-    setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 3000);
-    return;
-}
-const list = await fetchList(); 
-if (!list) return;
-if (BigInt(list[0].issueNumber) < BigInt(target)) return;
-clearInterval(iv);
+    // 1. Timeout Check & Handling
+    // (Note: If this part is inside an interval callback, make sure its placement matches your function structure)
+    
+    const list = await fetchList(); 
+    if (!list || !list.length) return;
+    
+    if (BigInt(list[0].issueNumber) < BigInt(target)) return;
+    clearInterval(iv);
 
-const res = list.find(i => i.issueNumber === target) || list[0];
-const num = parseInt(res.number || res.winNumber || 0);
-let actual;
-if (predType === "SIZE") actual = num >= 5 ? "BIG" : "SMALL";
-else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
-const win = predicted === actual;
+    // 2. Safe Extraction & Number Parsing (Fixed to prevent undefined/null crashes)
+    const res = list.find(i => i.issueNumber === target) || list[0];
+    const rawNum = res ? (res.number ?? res.winNumber ?? 0) : 0;
+    const num = parseInt(rawNum, 10) || 0;
 
-updateAfterResult(userId, win);
-
-const s = stats[userId];
-s.total++;
-if (win) { 
-    s.win++; 
-    s.winStreak++; 
-    s.lossStreak = 0; 
-    if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak; 
-} else { 
-    s.loss++; 
-    s.lossStreak++; 
-    s.winStreak = 0; 
-    if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak; 
-}
-
-if (cfg.enabled && wasReal) {
-    if (win) await handleWin(userId, chatId, actual, num);
-    else await handleLoss(userId, chatId, actual, num);
-
-    // --- PROFIT STOP & RESTART LOGIC (FIXED) ---
-    if (pt.pnl >= cfg.targetProfit) {
-        st.isWaiting = true;
-        
-        // FIXED: Changed to hours calculation (cfg.restartDelay is in hours)
-        st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 60 * 1000); 
-
-        const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
-        await send(chatId, 
-            "🎯 TARGET REACHED!\n" +
-            "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
-            "🛑 Bot Paused.\n" +
-            "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
-            "🔄 Next Section: " + restartTimeStr
-        );
-    }
-
-} else if (cfg.enabled && !wasReal) {
-    if (win) await send(chatId, "👀 Watch ✅ Correct! (No bet placed)");
-    else await send(chatId, "👀 Watch ❌ Incorrect! (No bet placed)");
-} else {
-    if (win) {
-        await send(chatId, "✅ WIN! #" + num + " " + actual + "\n🔥 " + s.winStreak + " streak");
-        await sendSticker(chatId, WIN_STICKER);
+    // 3. Result Calculation
+    let actual;
+    if (predType === "SIZE") {
+        actual = num >= 5 ? "BIG" : "SMALL";
     } else {
-        await send(chatId, "❌ LOSS #" + num + " " + actual + "\n💔 " + s.lossStreak + " loss");
-        await sendSticker(chatId, LOSS_STICKER);
+        actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
     }
-}
-setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
+    
+    const win = predicted === actual;
 
+    // 4. Update Stats
+    updateAfterResult(userId, win);
+
+    if (!stats[userId]) {
+        stats[userId] = { total: 0, win: 0, loss: 0, winStreak: 0, lossStreak: 0, maxWinStreak: 0, maxLossStreak: 0 };
+    }
+    
+    const s = stats[userId];
+    s.total++;
+    if (win) { 
+        s.win++; 
+        s.winStreak++; 
+        s.lossStreak = 0; 
+        if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak; 
+    } else { 
+        s.loss++; 
+        s.lossStreak++; 
+        s.winStreak = 0; 
+        if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak; 
+    }
+
+    // 5. Notifications & Target Logic
+    if (cfg.enabled && wasReal) {
+        if (win) {
+            await handleWin(userId, chatId, actual, num);
+        } else {
+            await handleLoss(userId, chatId, actual, num);
+        }
+
+        // --- PROFIT STOP & RESTART LOGIC ---
+        if (pt && pt.pnl >= cfg.targetProfit) {
+            st.isWaiting = true;
+            st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 60 * 1000); // Hours calculation
+
+            const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
+            await send(chatId, 
+                "🎯 TARGET REACHED!\n" +
+                "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
+                "🛑 Bot Paused.\n" +
+                "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
+                "🔄 Next Section: " + restartTimeStr
+            );
+        }
+
+    } else if (cfg.enabled && !wasReal) {
+        if (win) {
+            await send(chatId, "👀 Watch ✅ Correct! (No bet placed)");
+        } else {
+            await send(chatId, "👀 Watch ❌ Incorrect! (No bet placed)");
+        }
+    } else {
+        if (win) {
+            await send(chatId, "✅ WIN! #" + num + " " + actual + "\n🔥 " + s.winStreak + " streak");
+            if (typeof WIN_STICKER !== 'undefined') await sendSticker(chatId, WIN_STICKER);
+        } else {
+            await send(chatId, "❌ LOSS #" + num + " " + actual + "\n💔 " + s.lossStreak + " loss");
+            if (typeof LOSS_STICKER !== 'undefined') await sendSticker(chatId, LOSS_STICKER);
+        }
+    }
+
+    // 6. Continue Loop
+    setTimeout(() => { 
+        if (running[userId]) runPredict(userId, chatId); 
+    }, 8000);
+}
 
 // ============================================================
 //  STATS
