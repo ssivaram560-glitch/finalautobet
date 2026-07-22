@@ -570,50 +570,47 @@ if (currentResult === 0) {
     };
 }
 
-function updateAfterResult(userId, wasWin, currentResult) {
+function updateAfterResult(userId, wasWin) {
     initState(userId);
     const state = userStates[userId];
 
-if (currentResult === 0) {
-        state.history = [];
-        state.mode = "NORMAL";
-        return; 
-    }
 
-    // எக்ஸ்ட்ரா வேரியபிள்ஸ் இல்லைனா செட் பண்ணிக்கிறோம்
+    // ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
     if (!state.history) state.history = [];
-    if (state.recoveryCount === undefined) state.recoveryCount = 0;
-
-    // 1. ஏற்கனவே RECOVERY மோடு ஆக்டிவ் ஆக இருந்தால்
-    if (state.mode === "RECOVERY") {
-        state.recoveryCount -= 1; // ஒரு பிரிடிக்ஷன் முடிஞ்சிருச்சு, சோ கவுண்ட்டை குறைக்கிறோம்
-
-        // கவுண்ட் 0-க்கு வரும்போது (சாதாரண பேட்டர்னுக்கு 1-ல இருந்து 0 ஆகும், அல்ட்ராவுக்கு 3-ல இருந்து 0 ஆகும்)
-        if (state.recoveryCount <= 0) {
-            state.mode = "NORMAL";
-            state.history = [];  // மோடு மாறும்போது பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி!
-            state.recoveryCount = 0;
-        }
-        
-        // RECOVERY மோடுல நடக்குற கேம் ரிசல்ட்ஸ் பழைய நார்மல் பேட்டர்னை பாதிக்கக் கூடாது என்பதால் return செய்கிறோம்
-        return; 
-    }
-
-    // 2. NORMAL மோடு ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
     const histStr = state.history.join(',');
 
-    // 3. அல்ட்ரா பேட்டர்ன் அனாலிசிஸ் (4 அல்லது அதற்கு மேற்பட்ட தொடர் நஷ்டங்கள்)
-    // எ.கா: L,L,L,L அல்லது W,L,L,L,L
-    if (/(W,L,L,L,L,L+)$/.test(histStr)) {
-        state.mode = "RECOVERY";
-        state.recoveryCount = 3; // 3 பிரிடிக்ஷன் வரை ரெக்கவரி மோடு நீடிக்கும்!
-        state.history = [];      // பேட்டர்ன் மேட்ச் ஆன உடனே பழைய நார்மல் ஹிஸ்டரி ரீசெட்!
+    // 1. RECOVERY மோட் முடிஞ்சா, ரீசெட் பண்ணிடுவோம்
+    if (state.mode === "RECOVERY") {
+        state.mode = "NORMAL";
+        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
+        return;
     }
 
-    // எந்த பேட்டர்னும் இல்லைனா நார்மலாவே தொடரும்
+    // 2. பேட்டர்ன் அனாலிசிஸ்
+    // Pattern 1: (W,W,L), (W,W,W,L) -> RECOVERY
+    if (histStr.endsWith('W,W,L') || histStr.endsWith('W,W,W,L')) {
+        state.mode = "RECOVERY";
+        state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
+    }
+    // Pattern 1.1: (W,L) -> NORMAL (ரீசெட் மட்டும்)
+    else if (histStr.endsWith('W,L')) {
+        state.mode = "NORMAL";
+        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
+    }
+    // Pattern 2: 4+ W followed by L -> NORMAL (ரீசெட் மட்டும்)
+    else if (/(W,W,W,W+),L$/.test(histStr)) {
+        state.mode = "NORMAL";
+        state.history = []; 
+    }
+    // Pattern 3: 4+ L -> RECOVERY
+    else if (/(L,L,L,L+)/.test(histStr)) {
+        state.mode = "RECOVERY";
+        state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
+    }
+    // Default
     else {
         state.mode = "NORMAL";
     }
@@ -624,25 +621,6 @@ function getStatus(userId) {
     const state = userStates[userId];
     return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/1)`;
 }
-
-function shouldBet(userId) {
-    initState(userId);
-    const state = userStates[userId];
-    
-    // Prediction எப்போதும் வரணும், ஆனா patterns ஆக்டிவ் ஆகும் போது மட்டும் (RECOVERY) பெட் பண்ணனும்
-    return state.mode === 'RECOVERY';
-    
-}
-
-function shouldBetNow(userId) {
-    const cfg = autobetCfg[userId], st = autobetState[userId];
-    if (!cfg.enabled) return false;
-    if (st.inMart) return true;
-    if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) return false;
-    return true;
-}
-
-
 
 
 async function handleWin(userId, chatId, actual, num) {
