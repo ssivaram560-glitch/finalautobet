@@ -61,7 +61,7 @@ let autobetState   = {};
 let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
 let userTokens = {}; 
-let userStates = {};
+
 
 // ============================================================
 //  LOGGING HELPER (New)
