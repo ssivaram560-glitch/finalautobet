@@ -497,40 +497,8 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
-// ============================================================
-//  USER STATE & INITIALIZATION HELPERS
-// ============================================================
-
-// Safe initialization to prevent undefined errors
-function initState(userId) {
-    if (!autobetState[userId]) {
-        autobetState[userId] = {
-            level: 1,
-            inMart: false,
-            consecutiveLoss: 0,
-            isWaiting: false,
-            nextStartTime: null
-        };
-    }
-    if (!userStates[userId]) {
-        userStates[userId] = {
-            mode: 'NORMAL',
-            history: []
-        };
-    }
-}
-
-// Alias for compatibility if initUser is called anywhere
-function initUser(userId) {
-    initState(userId);
-}
-
-// ============================================================
-//  DECISION & PREDICTION LOGIC
-// ============================================================
-
 function decidePrediction(list, level, userId) {
-    initState(userId); // Fixed to use initState safely
+    initUser(userId);
     const state = userStates[userId];
     const currentPeriod = list[0].issueNumber;
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
@@ -546,11 +514,6 @@ function decidePrediction(list, level, userId) {
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
     let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
-    
-    // RECOVERY மோட்ல மட்டும் ஆப்போசிட் பண்ணுவோம்
-    if (state.mode === 'RECOVERY') {
-        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
-    }
 
     return { 
         type: 'SIZE', 
@@ -560,76 +523,38 @@ function decidePrediction(list, level, userId) {
     };
 }
 
-// ============================================================
-//  RESULT UPDATER
-// ============================================================
-
 function updateAfterResult(userId, wasWin) {
-    initState(userId); // Safely initialize state
+    initUser(userId);
     const state = userStates[userId];
 
-    // 1. ரிசல்ட்டை சேர்
-    if (!state.history) state.history = [];
+    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
-    
-    // 2. பேட்டர்ன் மேட்ச் ஆகுதான்னு செக் பண்ணு
-    const histStr = state.history.join(',');
-
-    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
-                              histStr.endsWith('W,W,W,L') || 
-                              /(L,L,L,L+)/.test(histStr);
-
-    const isNormalPattern = histStr.endsWith('W,L') || 
-                            /(W,W,W,W+),L$/.test(histStr);
-
-    if (isRecoveryPattern || isNormalPattern) {
-        if (state.mode === "RECOVERY" && wasWin) {
-            state.mode = "NORMAL";
-        } else if (isRecoveryPattern) {
-            state.mode = "RECOVERY";
-        } else {
-            state.mode = "NORMAL";
-        }
-
-        state.history = []; 
-        console.log(`[DEBUG] Pattern matched! History cleared. Fresh start.`);
-    }
-    
     if (state.history.length > 10) state.history.shift();
-}
 
-// ============================================================
-//  SINGLE UNIFIED shouldBet FUNCTION (Duplicates Removed)
-// ============================================================
-
-function shouldBet(userId) {
-    initState(userId); // Safely initialize state
-    const state = userStates[userId];
-    
-    if (!state.history || state.history.length === 0) return false;
-
-    const histStr = state.history.join(',');
-    console.log(`[DEBUG] Current History: ${histStr} | Mode: ${state.mode}`);
-
-    const isRecoveryPattern = histStr.endsWith('W,W,L') || 
-                              histStr.endsWith('W,W,W,L') || 
-                              /(L,L,L,L+)/.test(histStr);
-
-    const isNormalPattern = histStr.endsWith('W,L') || 
-                            /(W,W,W,W+),L$/.test(histStr);
-
-    const result = (state.mode === 'RECOVERY' || isRecoveryPattern || isNormalPattern);
-    
-    console.log(`[DEBUG] Should Bet: ${result}`);
-    return result;
+    // Mode eppovum NORMAL-la thaan irukkum
+    state.mode = "NORMAL";
+    state.recoveryCount = 0;
 }
 
 function getStatus(userId) {
-    initState(userId);
+    initUser(userId);
     const state = userStates[userId];
     const hist = state.history.join(',') || "EMPTY";
     return `NORMAL | History: [${hist}]`;
 }
+
+
+function shouldBet(userId) {
+    initUser(userId);
+    const state = userStates[userId];
+    const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /L,W,W,W,W,W,L$/.test(histStr);
+}
+
+
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
