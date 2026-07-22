@@ -496,23 +496,10 @@ return false;
 
 // ============================================================
 //  LOGIC
-// Complete safe initialization avoiding redeclaration errors
-var userStates = userStates || (typeof window !== 'undefined' ? window.userStates : null) || {};
-
-function initUser(userId) {
-    if (!userStates[userId]) {
-        userStates[userId] = {
-            mode: "NORMAL",
-            history: [],
-            recoveryCount: 0
-        };
-    }
-}
-
+// ============================================================
 function decidePrediction(list, level, userId) {
     initUser(userId);
     const state = userStates[userId];
-    
     const currentPeriod = list[0].issueNumber;
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
@@ -526,16 +513,11 @@ function decidePrediction(list, level, userId) {
     const first14 = noDecimal.substring(0, 14);
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
-    let basePrediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
-    let finalPrediction = basePrediction;
-
-    if (state.mode === "RECOVERY") {
-        finalPrediction = basePrediction === 'SMALL' ? 'BIG' : 'SMALL';
-    }
+    let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
 
     return { 
         type: 'SIZE', 
-        val: finalPrediction, 
+        val: prediction, 
         conf: 99, 
         pat: state.mode 
     };
@@ -545,55 +527,34 @@ function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
 
+    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
-    if (state.history.length > 20) state.history.shift();
+    if (state.history.length > 10) state.history.shift();
 
-    const histStr = state.history.join(',');
-
-    if (state.mode === "NORMAL") {
-        const isFourPlusWins = /(?:^|,)(W(?:,W)+)(?:,|$)/.test(histStr) && 
-                               (histStr.match(/W/g) || []).length >= 4;
-
-        if (isFourPlusWins || histStr.endsWith('W,W,W,W')) {
-            state.mode = "RECOVERY";
-            state.history = []; 
-            state.recoveryCount = 0;
-            return;
-        }
-    } 
-    else if (state.mode === "RECOVERY") {
-        state.recoveryCount++;
-
-        const recoveryPatterns = [
-            /W,L$/, 
-            /W,W,L$/, 
-            /L$/, 
-            /L,L$/, 
-            /W$/,
-            /(?:^|,)(L(?:,L)+)(?:,|$)/
-        ];
-
-        const matchedRecovery = recoveryPatterns.some(pattern => pattern.test(histStr));
-
-        if (wasWin || matchedRecovery || state.recoveryCount >= 3) {
-            state.mode = "NORMAL";
-            state.history = [];
-            state.recoveryCount = 0;
-        }
-    }
+    // Mode eppovum NORMAL-la thaan irukkum
+    state.mode = "NORMAL";
+    state.recoveryCount = 0;
 }
 
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
     const hist = state.history.join(',') || "EMPTY";
-    return `${state.mode} | Count: ${state.recoveryCount} | History: [${hist}]`;
+    return `NORMAL | History: [${hist}]`;
 }
+
 
 function shouldBet(userId) {
     initUser(userId);
-    return true;
+    const state = userStates[userId];
+    const histStr = state.history.join(',');
+    
+    // Pattern: W,W,W,W,L (4 Wins + 1 Loss)
+    // Intha pattern vantha mattum thaan bet kattum
+    return /L,W,W,W,W,W,L$/.test(histStr);
 }
+
+
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
@@ -603,12 +564,7 @@ async function handleWin(userId, chatId, actual, num) {
     let contractAmt = amt * 0.98; // 2% fee poga meethi
     let winAmt = 0;
     
-    // 0 illa 5 vantha 1.5x, mathapadi 2x
-    if (num === 0 || num === 5) {
-        winAmt = contractAmt * 1.5;
-    } else {
-        winAmt = contractAmt * 2;
-    }
+    
     
     let profit = winAmt - amt; // Net Profit
     // ----------------------------------
