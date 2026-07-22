@@ -497,29 +497,101 @@ return false;
 // ============================================================
 //  LOGIC
 // ============================================================
+function getBigSmall(num) {
+    return num >= 5 ? 'BIG' : 'SMALL';
+}
+
+function getBSPattern(list) {
+    return list.slice(0, 40).map(item => {
+        const num = parseInt(item.number || item.winNumber || 0);
+        return num >= 5 ? 'B' : 'S';
+    }).join('');
+}
+
+function getStreakInfo(pattern) {
+    if (!pattern) return { char: 'B', count: 0 };
+    let count = 0;
+    const firstChar = pattern[0];
+    for (let i = 0; i < pattern.length; i++) {
+        if (pattern[i] === firstChar) count++;
+        else break;
+    }
+    return { char: firstChar, count };
+}
+
 function decidePrediction(list, level, userId) {
     initUser(userId);
     const state = userStates[userId];
-    const currentPeriod = list[0].issueNumber;
-    const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
-    const nextPeriodNum = BigInt(currentPeriod) + 1n;
-    const nextPeriod = nextPeriodNum.toString();
-    const nextLast3Num = parseInt(nextPeriod.slice(-3));
+    const pattern = getBSPattern(list);
+    const streak = getStreakInfo(pattern);
+    
+    let predictionSize = 'BIG';
+    let confidence = 75;
+    let method = 'NORMAL';
 
-    const answer = nextLast3Num * Math.exp(currentResult);
-    const answerStr = answer.toString();
-    const noDecimal = answerStr.replace('.', '');
-    const first14 = noDecimal.substring(0, 14);
-    const lastDigit = parseInt(first14.charAt(first14.length - 1));
+    if (state.history && state.history.length > 0) {
+        const lastResult = state.history[state.history.length - 1];
+        if (lastResult === 'L') {
+            const actualLastNum = parseInt(list[0].number || list[0].winNumber || 0);
+            predictionSize = getBigSmall(actualLastNum) === 'BIG' ? 'SMALL' : 'BIG';
+            confidence = 88;
+            method = 'P3_RECOVERY';
+        }
+    }
 
-    let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
+    if (method === 'NORMAL') {
+        if (pattern.startsWith('BBBSBS')) {
+            predictionSize = 'SMALL';
+            confidence = 80;
+            method = 'TREND_INJECTION_BBBSBS';
+        } else if (pattern.startsWith('SSSBSB')) {
+            predictionSize = 'BIG';
+            confidence = 80;
+            method = 'TREND_INJECTION_SSSBSB';
+        }
+    }
+
+    if (method === 'NORMAL') {
+        if (streak.count === 4) {
+            predictionSize = streak.char === 'B' ? 'SMALL' : 'BIG';
+            confidence = 86;
+            method = 'STREAK_4X_REVERSE';
+        } else if (streak.count >= 6) {
+            predictionSize = streak.char === 'B' ? 'SMALL' : 'BIG';
+            confidence = 90;
+            method = 'DRAGON_ZONE_6X';
+        } else if (streak.count >= 5) {
+            predictionSize = streak.char === 'B' ? 'BIG' : 'SMALL';
+            confidence = 82;
+            method = 'STREAK_5X_RIDE';
+        }
+    }
+
+    if (method === 'NORMAL') {
+        if (streak.count >= 2 && streak.count <= 8) {
+            confidence = Math.floor(Math.random() * (96 - 82 + 1)) + 82;
+            predictionSize = Math.random() > 0.5 ? 'BIG' : 'SMALL';
+            method = 'BUNNY_AI_CYCLE';
+        }
+    }
+
+    confidence = Math.min(96, Math.max(55, confidence));
+
+    let selectedNumber = 0;
+    if (predictionSize === 'BIG') {
+        const bigPool = [5, 6, 7, 8, 9];
+        selectedNumber = bigPool[Math.floor(Math.random() * bigPool.length)];
+    } else {
+        const smallPool = [0, 1, 2, 3, 4];
+        selectedNumber = smallPool[Math.floor(Math.random() * smallPool.length)];
+    }
 
     return { 
-        type: 'SIZE', 
-        val: prediction, 
-        conf: 99, 
-        pat: state.mode 
+        size: predictionSize, 
+        number: selectedNumber, 
+        confidence: confidence, 
+        method: method 
     };
 }
 
@@ -527,15 +599,12 @@ function updateAfterResult(userId, wasWin) {
     initUser(userId);
     const state = userStates[userId];
 
-    // AI win/loss history-ah push pannuvom
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
-    // Mode eppovum NORMAL-la thaan irukkum
     state.mode = "NORMAL";
     state.recoveryCount = 0;
 }
-
 function getStatus(userId) {
     initUser(userId);
     const state = userStates[userId];
