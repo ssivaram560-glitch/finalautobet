@@ -499,10 +499,16 @@ return false;
 // ============================================================
 // Global user states storage
 // Safely declare userStates so it won't throw duplicate declaration errors
-if (typeof globalThis.userStates === 'undefined') {
-    globalThis.userStates = {};
+// Safe global declaration to prevent duplicate identifier errors
+if (typeof window !== 'undefined' && !window.userStates) {
+    window.userStates = {};
+} else if (typeof global !== 'undefined' && !global.userStates) {
+    global.userStates = {};
 }
-const userStates = globalThis.userStates;
+
+const userStates = (typeof window !== 'undefined' ? window.userStates : null) || 
+                   (typeof global !== 'undefined' ? global.globalStates : {}) || 
+                   {};
 
 function initUser(userId) {
     if (!userStates[userId]) {
@@ -606,8 +612,6 @@ function shouldBet(userId) {
     initUser(userId);
     return true; // Always bet as requested
 }
-
-
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
