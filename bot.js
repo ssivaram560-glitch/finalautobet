@@ -513,7 +513,7 @@ function decidePrediction(list, level, userId) {
     const first14 = noDecimal.substring(0, 14);
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
-    let prediction = lastDigit <= 4 ? 'BIG' : 'SMALL';
+    let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
 
     return { 
         type: 'SIZE', 
@@ -565,7 +565,11 @@ async function handleWin(userId, chatId, actual, num) {
     let winAmt = 0;
     
     // 0 illa 5 vantha 1.5x, mathapadi 2x
-    
+    if (num === 0 || num === 5) {
+        winAmt = contractAmt * 1.5;
+    } else {
+        winAmt = contractAmt * 2;
+    }
     
     let profit = winAmt - amt; // Net Profit
     // ----------------------------------
@@ -791,7 +795,7 @@ st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calcu
                     "🎯 TARGET REACHED!\n" +
                     "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
                     "🛑 Bot Paused.\n" +
-                    "⏳ Delay: " + cfg.restartDelay + " minutes\n" +
+                    "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
                     "🔄 Next Section: " + restartTimeStr
                 );
             }
