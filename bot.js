@@ -623,32 +623,13 @@ function getStatus(userId) {
 }
 
 
-async function handleWin(userId, chatId, actual, num) {
+
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-    
-    // --- CORRECT PROFIT CALCULATION ---
-    // நீங்கள் சொன்னது போல 0.98 ஆல் பெருக்கினால் 2% பீஸ் போக நிகர லாபம் (Net Profit) கிடைக்கும்
-    let profit = amt * 0.98; 
-    // ----------------------------------
-
-    pt.totalBets++;
-    pt.wins++;
-    pt.pnl += profit; // இப்போது pnl சரியாக பிளஸ் (+) ஆகும்
-    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++;
-    pt.lossStreak = 0;
-    
-    if(pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
-    
-    st.level = 1;
-    st.inMart = false;
-    st.consecutiveLoss = 0;
-    
-    // pt.losses இல்லையென்றால் 0 என எடுத்துக்கொள்ளும்
-    const currentLosses = pt.losses || 0;
-
+    const amt=cfg.baseBet*MULT[st.level-1],profit=amt*0.98;
+    pt.totalBets++;pt.wins++;pt.pnl+=profit;
+    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
+    st.level=1;st.inMart=false;st.consecutiveLoss=0;
     await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ✅ WIN! 🎉              ║\n"+
@@ -658,11 +639,11 @@ async function handleWin(userId, chatId, actual, num) {
 "║ Profit : +₹"+profit.toFixed(2)+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "║ Streak : "+pt.winStreak+" wins\n"+
-"║ Total  : "+pt.wins+"W/"+currentLosses+"L\n"+
+"║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
-    await sendSticker(chatId, WIN_STICKER);
+    await sendSticker(chatId,WIN_STICKER);
 }
 
 
