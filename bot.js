@@ -534,9 +534,7 @@ function decidePrediction(list, currentLevel, userId) {
 
 
 // Previous result 0னா prediction வேண்டாம்
-if (currentResult === 0) {
-    return null;
-}
+
 
     // STEP 1: Calculate next period
     const nextPeriodNum = BigInt(currentPeriod) + 1n;
@@ -582,24 +580,29 @@ function updateAfterResult(userId, wasWin) {
 
     const histStr = state.history.join(',');
 
-    // 1. RECOVERY மோட் முடிஞ்சா, ரீசெட் பண்ணிடுவோம்
+    // 1. RECOVERY மோட்ல இருக்கும்போது Win வந்தா, ரீசெட் பண்ணிடுவோம்
     if (state.mode === "RECOVERY") {
-        state.mode = "NORMAL";
-        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
-        return;
+        if (wasWin) {
+            state.mode = "NORMAL";
+            state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
+            return;
+        } else {
+            // RECOVERY மோட்ல இருக்கும்போது Loss வந்தா, ஹிஸ்ட்ரியை மெயின்டைன் பண்ணுவோம்
+            // இது புதிய பேட்டர்ன்களைக் கண்டறிய உதவும்
+            // ஆனால், RECOVERY மோட்ல இருக்கும்போது history reset ஆகக்கூடாது.
+            // எனவே, இந்த இடத்தில் history reset செய்வதைத் தவிர்க்கிறோம்.
+            // மேலும், RECOVERY மோட்ல இருக்கும்போது, புதிய பேட்டர்ன்களைக் கண்டறியும் logic கீழே உள்ளது.
+            // இந்த else block-ல் எந்த மாற்றமும் செய்யத் தேவையில்லை.
+        }
     }
 
     // 2. பேட்டர்ன் அனாலிசிஸ்
-    // Pattern 1: (W,W,L), (W,W,W,L) -> RECOVERY
-    if (histStr.endsWith('W,W,L') || histStr.endsWith('W,W,W,L')) {
+    // Pattern 1: (W,W,L), (W,W,W,L), (L,L), (W,L) -> RECOVERY
+    if (histStr.endsWith('W,W,L') || histStr.endsWith('W,W,W,L') || histStr.endsWith('L,L') || histStr.endsWith('W,L')) {
         state.mode = "RECOVERY";
         state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
     }
-    // Pattern 1.1: (W,L) -> NORMAL (ரீசெட் மட்டும்)
-    else if (histStr.endsWith('W,L')) {
-        state.mode = "NORMAL";
-        state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
-    }
+
     // Pattern 2: 4+ W followed by L -> NORMAL (ரீசெட் மட்டும்)
     else if (/(W,W,W,W+),L$/.test(histStr)) {
         state.mode = "NORMAL";
@@ -619,8 +622,12 @@ function updateAfterResult(userId, wasWin) {
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/1)`;
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY`;
 }
+
+
+
+
 
 
 
