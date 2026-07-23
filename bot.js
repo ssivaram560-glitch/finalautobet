@@ -647,8 +647,7 @@ async function handleWin(userId, chatId, actual, num) {
 }
 
 
-async function handleLoss(userId, chatId, actual, num) {
-    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+
 async function handleLoss(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     
