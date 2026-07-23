@@ -624,22 +624,31 @@ function getStatus(userId) {
 
 
 async function handleWin(userId, chatId, actual, num) {
+async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
     
     // --- CORRECT PROFIT CALCULATION ---
-    let contractAmt = amt * 0.98; // 2% fee poga meethi
-    let winAmt = 0;
-    
-    
-    
-    let profit = winAmt - amt; // Net Profit
+    // Profit = Bet Amount * 0.98 (2% fee போக)
+    let profit = amt * 0.98; 
+    let winAmt = amt + profit; 
     // ----------------------------------
 
-    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
-    st.level=1;st.inMart=false;st.consecutiveLoss=0;
+    pt.totalBets++;
+    pt.wins++;
+    pt.pnl += profit; 
+    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++;
+    pt.lossStreak = 0;
     
+    if(pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
+    
+    st.level = 1;
+    st.inMart = false;
+    st.consecutiveLoss = 0;
+    
+    const losses = pt.losses || 0; 
+
     await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ✅ WIN! 🎉              ║\n"+
@@ -649,7 +658,7 @@ async function handleWin(userId, chatId, actual, num) {
 "║ Profit : +₹"+profit.toFixed(2)+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "║ Streak : "+pt.winStreak+" wins\n"+
-"║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
+"║ Total  : "+pt.wins+"W/"+losses+"L\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
