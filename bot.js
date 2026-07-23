@@ -649,26 +649,53 @@ async function handleWin(userId, chatId, actual, num) {
 
 async function handleLoss(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+async function handleLoss(userId, chatId, actual, num) {
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    
+    // தற்போதைய லெவலுக்கான பெட் தொகை
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-    pt.totalBets++;pt.losses++;pt.pnl-=amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.lossStreak++;pt.winStreak=0;if(pt.lossStreak>pt.maxL)pt.maxL=pt.lossStreak;
-    if(st.level<cfg.maxLvl){
-        st.level++;st.inMart=true;
-        const next=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-        await send(chatId,
+    
+    pt.totalBets++;
+    pt.losses++;
+    pt.pnl -= amt; // லாஸ் என்பதால் பெட் தொகை கழிக்கப்படுகிறது
+    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    
+    pt.lossStreak++;
+    pt.winStreak = 0;
+    if(pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
+    
+    st.consecutiveLoss++;
+    
+    // Martingale Logic: அடுத்த லெவலுக்கு செல்லுதல்
+    if (st.level < cfg.maxLevel) {
+        st.level++;
+        st.inMart = true;
+    } else {
+        // மேக்ஸ் லெவல் வந்தவுடன் மீண்டும் லெவல் 1-க்கு திரும்புதல்
+        st.level = 1;
+        st.inMart = false;
+    }
+    
+    // Safety check for undefined values
+    const wins = pt.wins || 0;
+    const losses = pt.losses || 0;
+
+    await send(chatId,
 "╔══════════════════════════╗\n"+
-"║  ❌ LOSS                 ║\n"+
+"║  ❌ LOSS 📉              ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
-"║ Loss   : -₹"+amt+"\n"+
+"║ Loss   : -₹"+amt.toFixed(2)+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"╠══════════════════════════╣\n"+
-"║ Next L"+st.level+" : ₹"+next+"\n"+
+"║ Streak : "+pt.lossStreak+" losses\n"+
+"║ Total  : "+wins+"W/"+losses+"L\n"+
+"║ Next   : L"+st.level+" | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
-        );
-        await sendSticker(chatId,LOSS_STICKER);
-    } else {
+    );
+    await sendSticker(chatId, LOSS_STICKER);
+}
+ else {
         st.level=1;st.inMart=false;st.consecutiveLoss=0;
         await send(chatId,
 "╔══════════════════════════╗\n"+
