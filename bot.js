@@ -619,10 +619,12 @@ function updateAfterResult(userId, wasWin) {
     }
 }
 
+
+
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY`;
+    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/10)`;
 }
 
 
