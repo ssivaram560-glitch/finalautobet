@@ -492,79 +492,35 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 return false;
 }
 
-
 // ============================================================
-//  LOGIC (NORMAL / OPPOSITE MODE)
+//  LOGIC (SAME / OPPOSITE MODE — 3 LEVEL)
 // ============================================================
 let userStates = {};
 
 // ════════════════════════════════════════════════════════════════════
-//  PATTERN DATABASE
-// ════════════════════════════════════════════════════════════════════
-const PATTERNS = [
-    // === Group 1 ===
-    ["BBBBS", "S"], ["SSSSS", "B"], ["BBBBB", "S"],
-    ["SSSSSB", "B"], ["SBSBB", "S"], ["SBSBSBS", "B"],
-    ["BSBBB", "S"], ["BSSSS", "B"], ["BBSBS", "S"],
-    ["BSBBS", "S"],
-    // === Group 2 ===
-    ["BBSSS", "S"], ["SBBSS", "B"], ["SBSSS", "B"],
-    ["BBSB", "S"], ["SSBB", "B"], ["SBSS", "B"],
-    ["SSSB", "B"], ["BSSB", "S"], ["SBBB", "S"],
-    ["SBSB", "B"], ["BBSS", "S"], ["BSSS", "B"],
-    // === Group 3 ===
-    ["SSBSS", "S"], ["BBSBS", "S"], ["SBBBB", "B"],
-    ["BSBBB", "S"], ["BBBBS", "B"], ["SBBBS", "B"],
-    ["SSBSB", "B"], ["SBBSB", "B"], ["SSBBS", "B"],
-    ["BSBSS", "S"], ["SBSSS", "S"], ["SBSBS", "S"],
-    ["BSBSB", "S"], ["BSSBS", "B"],
-    // === Group 4 ===
-    ["SSSBB", "B"], ["BBBSS", "S"], ["SBSBB", "S"],
-    ["SSSSB", "B"], ["SSBBB", "S"], ["SSBBS", "B"],
-    ["SBBSB", "S"], ["BBSBS", "S"], ["BBBBBB", "S"],
-    ["BBBB", "S"], ["SBBBS", "S"], ["BBSSSS", "B"],
-    ["SSSSBS", "B"], ["BSSSS", "B"], ["BBSBSB", "S"],
-    ["SSSSSS", "B"],
-    // === Group 5 ===
-    ["SSBBBBSS", "B"], ["BSSSSBBB", "S"],
-    ["BSSSBBBS", "S"], ["SSSBBBSS", "B"],
-    ["SSSSBBSS", "B"], ["SSSSSSS", "B"],
-    ["BSSSSSB", "B"], ["BBBBBSB", "S"],
-    ["BBSBSSB", "S"], ["BBBSBSB", "S"],
-    ["BSSSSBB", "B"], ["SBBSSSB", "B"],
-    ["SSBSSSS", "B"], ["SBBSSBS", "B"],
-    ["SSSBBBS", "B"], ["SBSSBBS", "B"],
-    // === Strategy ===
-    ["SSSS", "B"], ["BBBB", "S"], ["SBSB", "S"],
-    ["BSBS", "B"], ["SSBB", "S"], ["BBSS", "B"],
-    ["SBBS", "B"], ["BSSB", "S"], ["SSSB", "B"],
-    ["BBBS", "S"], ["SSBS", "B"], ["BBSB", "S"],
-    ["BSSS", "B"]
-];
-
-// ════════════════════════════════════════════════════════════════════
-//  INIT STATE — Safe, never overwrites existing data
+//  INIT STATE — Safe
 // ════════════════════════════════════════════════════════════════════
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            patternHistory: [],
-            mode: "NORMAL",
+            resultHistory: [],   // actual B/S results (oldest first)
+            skipCount: 0,        // predictions to skip after L3 loss
+            currentMode: null,   // "SAME" or "OPPOSITE"
             lastPrediction: null
         };
     }
-    if (!Array.isArray(userStates[userId].patternHistory)) {
-        userStates[userId].patternHistory = [];
+    if (!Array.isArray(userStates[userId].resultHistory)) {
+        userStates[userId].resultHistory = [];
     }
-    if (!userStates[userId].mode) {
-        userStates[userId].mode = "NORMAL";
+    if (typeof userStates[userId].skipCount !== "number") {
+        userStates[userId].skipCount = 0;
     }
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  BUILD B/S SEQUENCE FROM API LIST (oldest first)
+//  BUILD B/S FROM API LIST (oldest first)
 // ════════════════════════════════════════════════════════════════════
-function buildPatternFromList(list, count) {
+function buildBSFromList(list, count) {
     const recent = list.slice(0, Math.min(count, list.length));
     const seq = [];
     for (const item of recent) {
@@ -577,40 +533,40 @@ function buildPatternFromList(list, count) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  GET NORMAL PREDICTION (from pattern DB — longest match first)
+//  GET MODE FROM LAST 2 RESULTS
 // ════════════════════════════════════════════════════════════════════
-function getNormalPrediction(list, userId) {
-    initState(userId);
-    const state = userStates[userId];
+function getModeFromLast2(resultHistory) {
+    if (resultHistory.length < 2) return null;
+    const len = resultHistory.length;
+    const secondLast = resultHistory[len - 2];
+    const last = resultHistory[len - 1];
 
-    // Merge saved history + current API results
-    const savedHistory = [...state.patternHistory];
-    const apiHistory = buildPatternFromList(list, 10);
-    const fullHistory = [...savedHistory, ...apiHistory];
+    // SAME: SS or BB
+    if (secondLast === last) return "SAME";
+    // OPPOSITE: BS or SB
+    return "OPPOSITE";
+}
 
-    if (fullHistory.length < 4) return null;
+// ════════════════════════════════════════════════════════════════════
+//  GET PREDICTION FROM MODE
+// ════════════════════════════════════════════════════════════════════
+function getPredictionFromMode(resultHistory, mode) {
+    if (resultHistory.length < 1) return null;
+    const last = resultHistory[resultHistory.length - 1]; // last actual result
 
-    const patternStr = fullHistory.join("");
-    const sorted = [...PATTERNS].sort((a, b) => b[0].length - a[0].length);
-
-    for (const [pattern, result] of sorted) {
-        if (patternStr.endsWith(pattern)) {
-            const prediction = result === "B" ? "BIG" : "SMALL";
-            console.log(`[PATTERN] "${patternStr}" ends with "${pattern}" → ${prediction}`);
-            return {
-                type: 'SIZE',
-                val: prediction,
-                conf: 90,
-                pat: pattern + '→' + result
-            };
-        }
+    if (mode === "SAME") {
+        // SS or BB → last result enna irukko adhe prediction
+        return last === "B" ? "BIG" : "SMALL";
     }
-
+    if (mode === "OPPOSITE") {
+        // BS or SB → last result opposite
+        return last === "B" ? "SMALL" : "BIG";
+    }
     return null;
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  DECIDE PREDICTION (NORMAL / OPPOSITE MODE)
+//  DECIDE PREDICTION
 // ════════════════════════════════════════════════════════════════════
 function decidePrediction(list, currentLevel, userId) {
 
@@ -621,74 +577,91 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    // ─── NORMAL MODE ───
-    // Pattern DB-la match panni direct prediction
-    if (state.mode === "NORMAL") {
-        const normalPred = getNormalPrediction(list, userId);
-        if (normalPred) {
-            state.lastPrediction = normalPred.val;
-            return normalPred;
-        }
-        return null; // No pattern match → skip
+    // ─── SKIP CHECK ───
+    // 3rd level loss aachu-na 14 predictions skip
+    if (state.skipCount > 0) {
+        state.skipCount--;
+        console.log(`[SKIP] Skipping prediction (${state.skipCount} left)`);
+        return null; // No prediction — just skip
     }
 
-    // ─── OPPOSITE MODE ───
-    // Pattern DB match → result opposite pannum
-    // Pattern-la "B" vantha namma "SMALL" nu prediction
-    // Pattern-la "S" vantha namma "BIG" nu prediction
-    if (state.mode === "OPPOSITE") {
-        const normalPred = getNormalPrediction(list, userId);
-        if (normalPred) {
-            const oppositeVal = normalPred.val === "BIG" ? "SMALL" : "BIG";
-            console.log(`[OPPOSITE] Pattern said: ${normalPred.val} → We predict: ${oppositeVal}`);
-            normalPred.val = oppositeVal;
-            normalPred.pat = 'OPPOSITE | ' + normalPred.pat;
-            normalPred.conf = 88;
-            state.lastPrediction = oppositeVal;
-            return normalPred;
-        }
-        return null;
-    }
+    // Build full history: saved + API
+    const savedHistory = [...state.resultHistory];
+    const apiHistory = buildBSFromList(list, 10);
+    const fullHistory = [...savedHistory, ...apiHistory];
 
-    return null;
+    if (fullHistory.length < 2) return null;
+
+    // Detect mode from last 2 results
+    const mode = getModeFromLast2(fullHistory);
+
+    if (!mode) return null;
+
+    // Get prediction based on mode
+    const prediction = getPredictionFromMode(fullHistory, mode);
+
+    if (!prediction) return null;
+
+    // Set confidence based on level
+    const level = autobetState[userId] ? autobetState[userId].level : 1;
+    const conf = level === 1 ? 90 : level === 2 ? 95 : 99;
+
+    state.currentMode = mode;
+    state.lastPrediction = prediction;
+
+    console.log(`[PREDICT] History: ...${fullHistory.slice(-4).join('')} | Mode: ${mode} | Predict: ${prediction} | L${level} ${conf}%`);
+
+    return {
+        type: 'SIZE',
+        val: prediction,
+        conf: conf,
+        pat: mode + ' | ' + fullHistory.slice(-2).join('') + '→' + prediction
+    };
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  UPDATE AFTER RESULT — Mode switching on loss
+//  UPDATE AFTER RESULT
 // ════════════════════════════════════════════════════════════════════
 function updateAfterResult(userId, wasWin, actualSize) {
     initState(userId);
     const state = userStates[userId];
+    const st = autobetState[userId];
 
     // Push actual B/S to history
     const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
-    state.patternHistory.push(bs);
-    if (state.patternHistory.length > 20) {
-        state.patternHistory.shift();
+    state.resultHistory.push(bs);
+
+    // Keep last 20 results
+    if (state.resultHistory.length > 20) {
+        state.resultHistory.shift();
     }
 
-    // ─── MODE SWITCHING ───
-    // Loss aachu-na mode maarum
-    if (!wasWin) {
-        if (state.mode === "NORMAL") {
-            state.mode = "OPPOSITE";
-            console.log(`[MODE] Loss → NORMAL to OPPOSITE`);
-        } else if (state.mode === "OPPOSITE") {
-            state.mode = "NORMAL";
-            console.log(`[MODE] Loss → OPPOSITE to NORMAL`);
-        }
+    if (wasWin) {
+        // WIN → Reset level to 1, continue same mode
+        if (st) st.level = 1;
+        state.skipCount = 0;
+        console.log(`[WIN] Reset to L1 | Mode: ${state.currentMode || 'SAME'} | History: ${state.resultHistory.join('')}`);
     } else {
-        // Win — same mode continue
-        console.log(`[MODE] Win → staying in ${state.mode}`);
-    }
+        // LOSS → Level up
+        if (st) st.level = (st.level || 1) + 1;
+        console.log(`[LOSS] Level up to L${st.level} | History: ${state.resultHistory.join('')}`);
 
-    console.log(`[HISTORY] ${state.patternHistory.join('')} | Mode: ${state.mode}`);
+        // L3 loss → 14 skip
+        if (st.level > 3) {
+            state.skipCount = 14;
+            st.level = 1; // Reset level after skip
+            console.log(`[SKIP SET] L3 loss → 14 predictions will be skipped`);
+        }
+    }
 }
 
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return `${state.mode} MODE | History: ${state.patternHistory.join('')}`;
+    const st = autobetState[userId];
+    let skipInfo = "";
+    if (state.skipCount > 0) skipInfo = ` | Skip: ${state.skipCount} remaining`;
+    return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
 }
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
