@@ -575,19 +575,44 @@ function decidePrediction(list, currentLevel, userId) {
     const state = userStates[userId];
 
     // ─── SKIP CHECK ───
-    // L3 loss aachu-na 15 predictions skip
+    // L3 loss or SSBB/BBSS pattern → skip predictions
     if (state.skipCount > 0) {
         state.skipCount--;
         console.log(`[SKIP] Skipping prediction (${state.skipCount} left)`);
+
+        // ─── RE-CHECK SSBB/BBSS during skip ───
+        // Every skip period la check pannum — adutha last 4 results still SSBB/BBSS na continue skip
+        const apiHistory = buildBSFromList(list, 10);
+        const checkHist = [...state.resultHistory, ...apiHistory];
+        if (checkHist.length >= 4) {
+            const last4 = checkHist.slice(-4).join('');
+            if (last4 === 'SSBB' || last4 === 'BBSS') {
+                // Still SSBB/BBSS — skip count-a 15 ku extend pannu (if not already high)
+                if (state.skipCount < 15) {
+                    state.skipCount = 15;
+                    console.log(`[SKIP EXTEND] Pattern ${last4} still detected — skip extended to 15`);
+                }
+            }
+        }
         return null; // No prediction — just skip
     }
 
-    // Build full history: saved + API
+    // ─── PRE-PREDICTION CHECK — SSBB/BBSS aachu-na skip pannu ───
     const savedHistory = [...state.resultHistory];
     const apiHistory = buildBSFromList(list, 10);
     const fullHistory = [...savedHistory, ...apiHistory];
 
     if (fullHistory.length < 2) return null;
+
+    // Check last 4 results for SSBB/BBSS
+    if (fullHistory.length >= 4) {
+        const last4 = fullHistory.slice(-4).join('');
+        if (last4 === 'SSBB' || last4 === 'BBSS') {
+            state.skipCount = 15;
+            console.log(`[SKIP] Pattern ${last4} detected — skipping 15 predictions`);
+            return null; // Skip this prediction too
+        }
+    }
 
     // Detect mode from last 2 results
     const mode = getModeFromLast2(fullHistory);
@@ -599,7 +624,7 @@ function decidePrediction(list, currentLevel, userId) {
 
     if (!prediction) return null;
 
-    // Set confidence based on level (L4 after skip)
+    // Set confidence based on level
     const level = autobetState[userId] ? autobetState[userId].level : 1;
     let conf;
     if (level === 1) conf = 90;
@@ -1290,27 +1315,44 @@ function addHandlers(){
             return send(id,"Token: "+(tok.length>20?"✅ ..."+tok.slice(-12):"❌")+"\nLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n\n/setcreds FULLPHONE PASSWORD\n/setmytoken TOKEN\n/login — Test");
         }
 
-       if(text==="▶️ Start Prediction"){
-    if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
-    if(running[id])return send(msg.chat.id,"⚠️ Already running!");
-    if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
-    running[id]=true;sentPeriods[id]=new Set();
-    autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
+      if(text==="▶️ Start Prediction"){
+            if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
+            if(running[id])return send(msg.chat.id,"⚠️ Already running!");
+            if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
+            running[id]=true;sentPeriods[id]=new Set();
+            autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
 
-    // 🔴 FIX: Load previous B/S history from API before starting
-   const prevList = await fetchList();
+            // Load previous B/S history from API
+            const prevList = await fetchList();
+            initState(id);
+
             if (prevList && prevList.length >= 4) {
-                initState(id);
+                // Build B/S history
                 userStates[id].resultHistory = buildBSFromList(prevList, 15);
                 await send(msg.chat.id, "📋 Loaded history: " + (userStates[id].resultHistory || []).join(''));
+
+                // ─── SSBB / BBSS PATTERN CHECK ───
+                // Last 4 results check (oldest first in array, so last 4 = end of array)
+                const hist = userStates[id].resultHistory;
+                if (hist.length >= 4) {
+                    const last4 = hist.slice(-4).join('');
+                    if (last4 === 'SSBB' || last4 === 'BBSS') {
+                        userStates[id].skipCount = 15;
+                        await send(msg.chat.id, 
+                            "⚠️ Pattern Detected: " + last4 + "\n" +
+                            "🚫 Skipping next 15 periods...\n" +
+                            "💡 Prediction will resume after skip."
+                        );
+                    }
+                }
             }
 
-    const cfg=autobetCfg[id];
-    await send(msg.chat.id,
+            const cfg=autobetCfg[id];
+            await send(msg.chat.id,
 "🚀 ENGINE ON!\n\nAutoBet: "+(cfg.enabled?"✅ ON":"❌ OFF")+"\nWatch  : "+(cfg.watch?"ON ("+cfg.watchLoss+"L)":"OFF")+"\nBase   : ₹"+cfg.baseBet+" | MaxLvl: "+cfg.maxLvl
-    );
-    runPredict(id,msg.chat.id);
-}
+            );
+            runPredict(id,msg.chat.id);
+        }
         if(text==="🛑 Stop")   {running[id]=false;send(msg.chat.id,"🛑 Stopped.");}
         if(text==="📊 Stats")  showStats(msg.chat.id,id);
         if(text==="💰 Profit") profitReport(msg.chat.id,id);
