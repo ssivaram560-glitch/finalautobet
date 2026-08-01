@@ -494,41 +494,8 @@ return false;
 
 
 
-// ============================================================
-//  LOGIC
-// ============================================================
-// Helper functions
-function parseNumber(record) {
-    const keys = ["number", "num", "colour", "color", "result"];
-    for (const key of keys) {
-        const val = record[key];
-        if (val !== undefined && val !== null) {
-            try {
-                return parseInt(String(val).trim());
-            } catch (e) {
-                // pass
-            }
-        }
-    }
-    return null;
-}
-
-function classify(num) {
-    return num >= 5 ? "BIG" : "SMALL";
-}
-
-function getLabels(history, count = 50) {
-    const labels = [];
-    for (let i = 0; i < Math.min(history.length, count); i++) {
-        const n = parseNumber(history[i]);
-        if (n !== null) {
-            labels.push(classify(n));
-        }
-    }
-    return labels;
-}
-// ============================================================
-//  LOGIC (PATTERN-BASED ONLY — NO RECOVERY)
+/// ============================================================
+//  LOGIC (PATTERN-BASED ONLY)
 // ============================================================
 let userStates = {};
 
@@ -536,30 +503,25 @@ let userStates = {};
 //  PATTERN DATABASE
 // ════════════════════════════════════════════════════════════════════
 const PATTERNS = [
-    // === Group 1 ===
     ["BBBBS", "S"], ["SSSSS", "B"], ["BBBBB", "S"],
     ["SSSSSB", "B"], ["SBSBB", "S"], ["SBSBSBS", "B"],
     ["BSBBB", "S"], ["BSSSS", "B"], ["BBSBS", "S"],
     ["BSBBS", "S"],
-    // === Group 2 ===
     ["BBSSS", "S"], ["SBBSS", "B"], ["SBSSS", "B"],
     ["BBSB", "S"], ["SSBB", "B"], ["SBSS", "B"],
     ["SSSB", "B"], ["BSSB", "S"], ["SBBB", "S"],
     ["SBSB", "B"], ["BBSS", "S"], ["BSSS", "B"],
-    // === Group 3 ===
     ["SSBSS", "S"], ["BBSBS", "S"], ["SBBBB", "B"],
     ["BSBBB", "S"], ["BBBBS", "B"], ["SBBBS", "B"],
     ["SSBSB", "B"], ["SBBSB", "B"], ["SSBBS", "B"],
     ["BSBSS", "S"], ["SBSSS", "S"], ["SBSBS", "S"],
     ["BSBSB", "S"], ["BSSBS", "B"],
-    // === Group 4 ===
     ["SSSBB", "B"], ["BBBSS", "S"], ["SBSBB", "S"],
     ["SSSSB", "B"], ["SSBBB", "S"], ["SSBBS", "B"],
     ["SBBSB", "S"], ["BBSBS", "S"], ["BBBBBB", "S"],
     ["BBBB", "S"], ["SBBBS", "S"], ["BBSSSS", "B"],
     ["SSSSBS", "B"], ["BSSSS", "B"], ["BBSBSB", "S"],
     ["SSSSSS", "B"],
-    // === Group 5 ===
     ["SSBBBBSS", "B"], ["BSSSSBBB", "S"],
     ["BSSSBBBS", "S"], ["SSSBBBSS", "B"],
     ["SSSSBBSS", "B"], ["SSSSSSS", "B"],
@@ -568,7 +530,6 @@ const PATTERNS = [
     ["BSSSSBB", "B"], ["SBBSSSB", "B"],
     ["SSBSSSS", "B"], ["SBBSSBS", "B"],
     ["SSSBBBS", "B"], ["SBSSBBS", "B"],
-    // === Strategy ===
     ["SSSS", "B"], ["BBBB", "S"], ["SBSB", "S"],
     ["BSBS", "B"], ["SSBB", "S"], ["BBSS", "B"],
     ["SBBS", "B"], ["BSSB", "S"], ["SSSB", "B"],
@@ -576,11 +537,18 @@ const PATTERNS = [
     ["BSSS", "B"]
 ];
 
+// ════════════════════════════════════════════════════════════════════
+//  INIT STATE — SAFE (never overwrites existing history)
+// ════════════════════════════════════════════════════════════════════
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            patternHistory: []  // B/S sequence — NEWEST LAST
+            patternHistory: []
         };
+    }
+    // Ensure patternHistory always exists (safety)
+    if (!Array.isArray(userStates[userId].patternHistory)) {
+        userStates[userId].patternHistory = [];
     }
 }
 
@@ -588,86 +556,91 @@ function initState(userId) {
 //  PATTERN MATCHER — Longest match first
 // ════════════════════════════════════════════════════════════════════
 function matchPattern(patternHistory) {
+    if (!patternHistory || patternHistory.length < 3) return null;
     const str = patternHistory.join("");
-
-    // Longest pattern first — more specific match gets priority
+    // Longest pattern first
     const sorted = [...PATTERNS].sort((a, b) => b[0].length - a[0].length);
-
     for (const [pattern, result] of sorted) {
         if (str.endsWith(pattern)) {
-            return {
-                pattern: pattern,
-                result: result  // "B" or "S"
-            };
+            return { pattern, result };
         }
     }
     return null;
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  DECIDE PREDICTION (PATTERN-BASED ONLY)
+//  BUILD B/S SEQUENCE FROM API LIST (oldest first)
+// ════════════════════════════════════════════════════════════════════
+function buildPatternFromList(list, count) {
+    const recent = list.slice(0, Math.min(count, list.length));
+    const seq = [];
+    for (const item of recent) {
+        const n = parseInt(item.number || item.winNumber || 0);
+        if (!isNaN(n)) {
+            seq.push(n >= 5 ? "B" : "S");
+        }
+    }
+    return seq.reverse(); // oldest first
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  DECIDE PREDICTION (PATTERN-BASED)
 // ════════════════════════════════════════════════════════════════════
 function decidePrediction(list, currentLevel, userId) {
 
-    if (!list || list.length < 8) {
+    if (!list || list.length < 4) {
         return null;
     }
 
     initState(userId);
     const state = userStates[userId];
 
-    // Build B/S sequence from recent results (oldest first)
-    const recent = list.slice(0, 10);
+    // Merge: saved history + current API results
+    const savedHistory = [...state.patternHistory];
+    const apiHistory = buildPatternFromList(list, 10);
 
-    const patternHistory = recent
-        .map(item => {
-            const n = parseInt(item.number || item.winNumber || 0);
-            if (isNaN(n)) return null;
-            return n >= 5 ? "B" : "S";
-        })
-        .filter(x => x !== null)
-        .reverse(); // oldest first
+    // Combine — saved history first (older), then new API results
+    const fullHistory = [...savedHistory, ...apiHistory];
 
-    if (patternHistory.length < 4) {
-        return null;
+    // Build pattern string
+    const patternStr = fullHistory.join("");
+
+    // Match against PATTERNS (longest first)
+    const sorted = [...PATTERNS].sort((a, b) => b[0].length - a[0].length);
+    for (const [pattern, result] of sorted) {
+        if (patternStr.endsWith(pattern)) {
+            const prediction = result === "B" ? "BIG" : "SMALL";
+            console.log(`[PATTERN] "${patternStr}" ends with "${pattern}" → ${prediction}`);
+            return {
+                type: 'SIZE',
+                val: prediction,
+                conf: 90,
+                pat: pattern + '→' + result
+            };
+        }
     }
 
-    // Match against PATTERNS database
-    const match = matchPattern(patternHistory);
-
-    if (match) {
-        const prediction = match.result === "B" ? "BIG" : "SMALL";
-        console.log(`[PATTERN] "${patternHistory.join('')}" ends with "${match.pattern}" → ${prediction}`);
-        return {
-            type: 'SIZE',
-            val: prediction,
-            conf: 90,
-            pat: match.pattern + '→' + match.result
-        };
-    }
-
-    // No pattern matched — SKIP, no prediction
+    // No pattern matched — SKIP
     return null;
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  UPDATE AFTER RESULT — Update pattern history with actual result
+//  UPDATE AFTER RESULT — Store actual B/S in history
 // ════════════════════════════════════════════════════════════════════
 function updateAfterResult(userId, wasWin, actualSize) {
     initState(userId);
     const state = userStates[userId];
 
-    // Update patternHistory with actual B/S result
-    if (actualSize === "BIG" || actualSize === "B") {
-        state.patternHistory.push("B");
-    } else {
-        state.patternHistory.push("S");
-    }
+    // Push actual result (B or S) to history
+    const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
+    state.patternHistory.push(bs);
 
-    // Keep last 15 results for pattern matching
-    if (state.patternHistory.length > 15) {
+    // Keep last 20 results
+    if (state.patternHistory.length > 20) {
         state.patternHistory.shift();
     }
+
+    console.log(`[HISTORY] Updated: ${state.patternHistory.join('')}`);
 }
 
 function getStatus(userId) {
@@ -675,7 +648,6 @@ function getStatus(userId) {
     const state = userStates[userId];
     return `PATTERN MODE | History: ${state.patternHistory.join('')}`;
 }
-
 
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
@@ -878,7 +850,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
         const win = predicted === actual;
 
-        updateAfterResult(userId, win);
+        updateAfterResult(userId, win, actual);
 
         const s = stats[userId];
         s.total++;
@@ -1306,18 +1278,27 @@ function addHandlers(){
             return send(id,"Token: "+(tok.length>20?"✅ ..."+tok.slice(-12):"❌")+"\nLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n\n/setcreds FULLPHONE PASSWORD\n/setmytoken TOKEN\n/login — Test");
         }
 
-        if(text==="▶️ Start Prediction"){
-            if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
-            if(running[id])return send(msg.chat.id,"⚠️ Already running!");
-            if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
-            running[id]=true;sentPeriods[id]=new Set();
-            autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
-            const cfg=autobetCfg[id];
-            await send(msg.chat.id,
+       if(text==="▶️ Start Prediction"){
+    if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
+    if(running[id])return send(msg.chat.id,"⚠️ Already running!");
+    if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
+    running[id]=true;sentPeriods[id]=new Set();
+    autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
+
+    // 🔴 FIX: Load previous B/S history from API before starting
+    const prevList = await fetchList();
+    if (prevList && prevList.length >= 4) {
+        initState(id);
+        userStates[id].patternHistory = buildPatternFromList(prevList, 15);
+        await send(msg.chat.id, "📋 Loaded history: " + userStates[id].patternHistory.join(''));
+    }
+
+    const cfg=autobetCfg[id];
+    await send(msg.chat.id,
 "🚀 ENGINE ON!\n\nAutoBet: "+(cfg.enabled?"✅ ON":"❌ OFF")+"\nWatch  : "+(cfg.watch?"ON ("+cfg.watchLoss+"L)":"OFF")+"\nBase   : ₹"+cfg.baseBet+" | MaxLvl: "+cfg.maxLvl
-            );
-            runPredict(id,msg.chat.id);
-        }
+    );
+    runPredict(id,msg.chat.id);
+}
         if(text==="🛑 Stop")   {running[id]=false;send(msg.chat.id,"🛑 Stopped.");}
         if(text==="📊 Stats")  showStats(msg.chat.id,id);
         if(text==="💰 Profit") profitReport(msg.chat.id,id);
