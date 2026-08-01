@@ -128,7 +128,7 @@ async function getLiveBalance(userId) {
 
 function initUser(id) {
     if (!stats[id])        stats[id]        = { total:0,win:0,loss:0,lossStreak:0,winStreak:0,maxWinStreak:0,maxLossStreak:0 };
-    if (!userStates[id])   userStates[id]   = { history:[], mode:"NORMAL", recoveryCount:0 };
+   if (!userStates[id])   userStates[id]   = { resultHistory:[], skipCount:0, currentMode:null, lastPrediction:null };
     if (!sentPeriods[id])  sentPeriods[id]  = new Set();
     if (!autobetCfg[id])   autobetCfg[id]   = { 
         watch:false, 
@@ -565,9 +565,6 @@ function getPredictionFromMode(resultHistory, mode) {
     return null;
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  DECIDE PREDICTION
-// ════════════════════════════════════════════════════════════════════
 function decidePrediction(list, currentLevel, userId) {
 
     if (!list || list.length < 4) {
@@ -578,7 +575,7 @@ function decidePrediction(list, currentLevel, userId) {
     const state = userStates[userId];
 
     // ─── SKIP CHECK ───
-    // 3rd level loss aachu-na 14 predictions skip
+    // L3 loss aachu-na 15 predictions skip
     if (state.skipCount > 0) {
         state.skipCount--;
         console.log(`[SKIP] Skipping prediction (${state.skipCount} left)`);
@@ -602,9 +599,13 @@ function decidePrediction(list, currentLevel, userId) {
 
     if (!prediction) return null;
 
-    // Set confidence based on level
+    // Set confidence based on level (L4 after skip)
     const level = autobetState[userId] ? autobetState[userId].level : 1;
-    const conf = level === 1 ? 90 : level === 2 ? 95 : 99;
+    let conf;
+    if (level === 1) conf = 90;
+    else if (level === 2) conf = 95;
+    else if (level === 3) conf = 99;
+    else conf = 99; // L4+ also 99%
 
     state.currentMode = mode;
     state.lastPrediction = prediction;
@@ -615,13 +616,9 @@ function decidePrediction(list, currentLevel, userId) {
         type: 'SIZE',
         val: prediction,
         conf: conf,
-        pat: mode + ' | ' + fullHistory.slice(-2).join('') + '→' + prediction
+        pat: mode + ' | L' + level + ' | ' + fullHistory.slice(-2).join('') + '→' + prediction
     };
 }
-
-// ════════════════════════════════════════════════════════════════════
-//  UPDATE AFTER RESULT
-// ════════════════════════════════════════════════════════════════════
 function updateAfterResult(userId, wasWin, actualSize) {
     initState(userId);
     const state = userStates[userId];
@@ -646,15 +643,15 @@ function updateAfterResult(userId, wasWin, actualSize) {
         if (st) st.level = (st.level || 1) + 1;
         console.log(`[LOSS] Level up to L${st.level} | History: ${state.resultHistory.join('')}`);
 
-        // L3 loss → 14 skip
+        // L3 loss → 15 skip → Level 4 ku start
         if (st.level > 3) {
-            state.skipCount = 14;
-            st.level = 1; // Reset level after skip
-            console.log(`[SKIP SET] L3 loss → 14 predictions will be skipped`);
+            state.skipCount = 15;
+            // DON'T reset to L1 — L3 loss after skip L4 ku start
+            // st.level stays at 4 (already incremented)
+            console.log(`[SKIP SET] L3 loss → 15 predictions skipped → will start from L${st.level}`);
         }
     }
 }
-
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
@@ -707,6 +704,8 @@ async function handleLoss(userId, chatId, actual, num) {
         );
         await sendSticker(chatId,LOSS_STICKER);
     } else {
+        // maxLvl reached — L3 ku apram 15 skip aachi L4 ku varum
+        // so here reset to L1 and inMart=false
         st.level=1;st.inMart=false;st.consecutiveLoss=0;
         await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -720,7 +719,6 @@ async function handleLoss(userId, chatId, actual, num) {
         await sendSticker(chatId,LOSS_STICKER);
     }
 }
-
 // ============================================================
 //  PREDICT LOOP
 // ============================================================
