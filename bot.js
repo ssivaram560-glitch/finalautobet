@@ -659,21 +659,28 @@ function updateAfterResult(userId, wasWin, actualSize) {
     }
 
     if (wasWin) {
-        // WIN → Reset level to 1, continue same mode
-        if (st) st.level = 1;
+        // WIN → Reset level to 1
+        if (st) {
+            st.level = 1;
+            st.inMart = false;
+            st.consecutiveLoss = 0;
+        }
         state.skipCount = 0;
         console.log(`[WIN] Reset to L1 | Mode: ${state.currentMode || 'SAME'} | History: ${state.resultHistory.join('')}`);
     } else {
         // LOSS → Level up
-        if (st) st.level = (st.level || 1) + 1;
-        console.log(`[LOSS] Level up to L${st.level} | History: ${state.resultHistory.join('')}`);
+        if (st) {
+            const prevLevel = st.level;
+            st.level++;
+            st.consecutiveLoss++; // Fix: Increment consecutive loss for watch mode
+            
+            console.log(`[LOSS] Level up to L${st.level} | History: ${state.resultHistory.join('')}`);
 
-        // L3 loss → 15 skip → Level 4 ku start
-        if (st.level > 3) {
-            state.skipCount = 15;
-            // DON'T reset to L1 — L3 loss after skip L4 ku start
-            // st.level stays at 4 (already incremented)
-            console.log(`[SKIP SET] L3 loss → 15 predictions skipped → will start from L${st.level}`);
+            // L3 loss →  8 skip → Level 4 ku start
+            if (prevLevel === 3) {
+                state.skipCount = 8;
+                console.log(`[SKIP SET] L3 loss → 8 predictions skipped → will start from L${st.level}`);
+            }
         }
     }
 }
@@ -685,12 +692,12 @@ function getStatus(userId) {
     if (state.skipCount > 0) skipInfo = ` | Skip: ${state.skipCount} remaining`;
     return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
 }
-async function handleWin(userId, chatId, actual, num) {
+async function handleWin(userId, chatId, actual, num, betLevel) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
+    const amt=cfg.customBets[betLevel-1] || (cfg.baseBet*MULT[betLevel-1]),profit=amt*0.98;
     pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
-    st.level=1;st.inMart=false;st.consecutiveLoss=0;
+    
     await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ✅ WIN! 🎉              ║\n"+
@@ -707,13 +714,14 @@ async function handleWin(userId, chatId, actual, num) {
     await sendSticker(chatId,WIN_STICKER);
 }
 
-async function handleLoss(userId, chatId, actual, num) {
+async function handleLoss(userId, chatId, actual, num, betLevel) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+    const amt=cfg.customBets[betLevel-1] || (cfg.baseBet*MULT[betLevel-1]);
     pt.totalBets++;pt.losses++;pt.pnl-=amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.lossStreak++;pt.winStreak=0;if(pt.lossStreak>pt.maxL)pt.maxL=pt.lossStreak;
-    if(st.level<cfg.maxLvl){
-        st.level++;st.inMart=true;
+    
+    if(st.level <= cfg.maxLvl){
+        st.inMart=true;
         const next=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
         await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -729,8 +737,6 @@ async function handleLoss(userId, chatId, actual, num) {
         );
         await sendSticker(chatId,LOSS_STICKER);
     } else {
-        // maxLvl reached — L3 ku apram 15 skip aachi L4 ku varum
-        // so here reset to L1 and inMart=false
         st.level=1;st.inMart=false;st.consecutiveLoss=0;
         await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -867,6 +873,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId],pt=profitTrack[userId];
     const wasReal=cfg.enabled ;
+    const betLevel = st.level; // Capture current level before updates
     
     const iv=setInterval(async()=>{
         if(!running[userId])return clearInterval(iv);
@@ -895,13 +902,13 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else{s.loss++;s.lossStreak++;s.winStreak=0;if(s.lossStreak>s.maxLossStreak)s.maxLossStreak=s.lossStreak;}
 
         if(cfg.enabled && wasReal){
-            if(win) await handleWin(userId,chatId,actual,num);
-            else    await handleLoss(userId,chatId,actual,num);
+            if(win) await handleWin(userId,chatId,actual,num,betLevel);
+            else    await handleLoss(userId,chatId,actual,num,betLevel);
 
             // --- NEW: PROFIT STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
-                st.isWaiting = true;// Intha line-ah mathunga:
-st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calculation
+                st.isWaiting = true;
+                st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); 
 
                 const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
                 await send(chatId, 
