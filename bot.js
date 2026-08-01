@@ -493,9 +493,8 @@ return false;
 }
 
 
-
-/// ============================================================
-//  LOGIC (PATTERN-BASED ONLY)
+// ============================================================
+//  LOGIC (NORMAL / OPPOSITE MODE)
 // ============================================================
 let userStates = {};
 
@@ -503,25 +502,30 @@ let userStates = {};
 //  PATTERN DATABASE
 // ════════════════════════════════════════════════════════════════════
 const PATTERNS = [
+    // === Group 1 ===
     ["BBBBS", "S"], ["SSSSS", "B"], ["BBBBB", "S"],
     ["SSSSSB", "B"], ["SBSBB", "S"], ["SBSBSBS", "B"],
     ["BSBBB", "S"], ["BSSSS", "B"], ["BBSBS", "S"],
     ["BSBBS", "S"],
+    // === Group 2 ===
     ["BBSSS", "S"], ["SBBSS", "B"], ["SBSSS", "B"],
     ["BBSB", "S"], ["SSBB", "B"], ["SBSS", "B"],
     ["SSSB", "B"], ["BSSB", "S"], ["SBBB", "S"],
     ["SBSB", "B"], ["BBSS", "S"], ["BSSS", "B"],
+    // === Group 3 ===
     ["SSBSS", "S"], ["BBSBS", "S"], ["SBBBB", "B"],
     ["BSBBB", "S"], ["BBBBS", "B"], ["SBBBS", "B"],
     ["SSBSB", "B"], ["SBBSB", "B"], ["SSBBS", "B"],
     ["BSBSS", "S"], ["SBSSS", "S"], ["SBSBS", "S"],
     ["BSBSB", "S"], ["BSSBS", "B"],
+    // === Group 4 ===
     ["SSSBB", "B"], ["BBBSS", "S"], ["SBSBB", "S"],
     ["SSSSB", "B"], ["SSBBB", "S"], ["SSBBS", "B"],
     ["SBBSB", "S"], ["BBSBS", "S"], ["BBBBBB", "S"],
     ["BBBB", "S"], ["SBBBS", "S"], ["BBSSSS", "B"],
     ["SSSSBS", "B"], ["BSSSS", "B"], ["BBSBSB", "S"],
     ["SSSSSS", "B"],
+    // === Group 5 ===
     ["SSBBBBSS", "B"], ["BSSSSBBB", "S"],
     ["BSSSBBBS", "S"], ["SSSBBBSS", "B"],
     ["SSSSBBSS", "B"], ["SSSSSSS", "B"],
@@ -530,6 +534,7 @@ const PATTERNS = [
     ["BSSSSBB", "B"], ["SBBSSSB", "B"],
     ["SSBSSSS", "B"], ["SBBSSBS", "B"],
     ["SSSBBBS", "B"], ["SBSSBBS", "B"],
+    // === Strategy ===
     ["SSSS", "B"], ["BBBB", "S"], ["SBSB", "S"],
     ["BSBS", "B"], ["SSBB", "S"], ["BBSS", "B"],
     ["SBBS", "B"], ["BSSB", "S"], ["SSSB", "B"],
@@ -538,34 +543,22 @@ const PATTERNS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════
-//  INIT STATE — SAFE (never overwrites existing history)
+//  INIT STATE — Safe, never overwrites existing data
 // ════════════════════════════════════════════════════════════════════
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            patternHistory: []
+            patternHistory: [],
+            mode: "NORMAL",
+            lastPrediction: null
         };
     }
-    // Ensure patternHistory always exists (safety)
     if (!Array.isArray(userStates[userId].patternHistory)) {
         userStates[userId].patternHistory = [];
     }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  PATTERN MATCHER — Longest match first
-// ════════════════════════════════════════════════════════════════════
-function matchPattern(patternHistory) {
-    if (!patternHistory || patternHistory.length < 3) return null;
-    const str = patternHistory.join("");
-    // Longest pattern first
-    const sorted = [...PATTERNS].sort((a, b) => b[0].length - a[0].length);
-    for (const [pattern, result] of sorted) {
-        if (str.endsWith(pattern)) {
-            return { pattern, result };
-        }
+    if (!userStates[userId].mode) {
+        userStates[userId].mode = "NORMAL";
     }
-    return null;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -584,29 +577,22 @@ function buildPatternFromList(list, count) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  DECIDE PREDICTION (PATTERN-BASED)
+//  GET NORMAL PREDICTION (from pattern DB — longest match first)
 // ════════════════════════════════════════════════════════════════════
-function decidePrediction(list, currentLevel, userId) {
-
-    if (!list || list.length < 4) {
-        return null;
-    }
-
+function getNormalPrediction(list, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    // Merge: saved history + current API results
+    // Merge saved history + current API results
     const savedHistory = [...state.patternHistory];
     const apiHistory = buildPatternFromList(list, 10);
-
-    // Combine — saved history first (older), then new API results
     const fullHistory = [...savedHistory, ...apiHistory];
 
-    // Build pattern string
-    const patternStr = fullHistory.join("");
+    if (fullHistory.length < 4) return null;
 
-    // Match against PATTERNS (longest first)
+    const patternStr = fullHistory.join("");
     const sorted = [...PATTERNS].sort((a, b) => b[0].length - a[0].length);
+
     for (const [pattern, result] of sorted) {
         if (patternStr.endsWith(pattern)) {
             const prediction = result === "B" ? "BIG" : "SMALL";
@@ -620,35 +606,90 @@ function decidePrediction(list, currentLevel, userId) {
         }
     }
 
-    // No pattern matched — SKIP
     return null;
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  UPDATE AFTER RESULT — Store actual B/S in history
+//  DECIDE PREDICTION (NORMAL / OPPOSITE MODE)
+// ════════════════════════════════════════════════════════════════════
+function decidePrediction(list, currentLevel, userId) {
+
+    if (!list || list.length < 4) {
+        return null;
+    }
+
+    initState(userId);
+    const state = userStates[userId];
+
+    // ─── NORMAL MODE ───
+    // Pattern DB-la match panni direct prediction
+    if (state.mode === "NORMAL") {
+        const normalPred = getNormalPrediction(list, userId);
+        if (normalPred) {
+            state.lastPrediction = normalPred.val;
+            return normalPred;
+        }
+        return null; // No pattern match → skip
+    }
+
+    // ─── OPPOSITE MODE ───
+    // Pattern DB match → result opposite pannum
+    // Pattern-la "B" vantha namma "SMALL" nu prediction
+    // Pattern-la "S" vantha namma "BIG" nu prediction
+    if (state.mode === "OPPOSITE") {
+        const normalPred = getNormalPrediction(list, userId);
+        if (normalPred) {
+            const oppositeVal = normalPred.val === "BIG" ? "SMALL" : "BIG";
+            console.log(`[OPPOSITE] Pattern said: ${normalPred.val} → We predict: ${oppositeVal}`);
+            normalPred.val = oppositeVal;
+            normalPred.pat = 'OPPOSITE | ' + normalPred.pat;
+            normalPred.conf = 88;
+            state.lastPrediction = oppositeVal;
+            return normalPred;
+        }
+        return null;
+    }
+
+    return null;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  UPDATE AFTER RESULT — Mode switching on loss
 // ════════════════════════════════════════════════════════════════════
 function updateAfterResult(userId, wasWin, actualSize) {
     initState(userId);
     const state = userStates[userId];
 
-    // Push actual result (B or S) to history
+    // Push actual B/S to history
     const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
     state.patternHistory.push(bs);
-
-    // Keep last 20 results
     if (state.patternHistory.length > 20) {
         state.patternHistory.shift();
     }
 
-    console.log(`[HISTORY] Updated: ${state.patternHistory.join('')}`);
+    // ─── MODE SWITCHING ───
+    // Loss aachu-na mode maarum
+    if (!wasWin) {
+        if (state.mode === "NORMAL") {
+            state.mode = "OPPOSITE";
+            console.log(`[MODE] Loss → NORMAL to OPPOSITE`);
+        } else if (state.mode === "OPPOSITE") {
+            state.mode = "NORMAL";
+            console.log(`[MODE] Loss → OPPOSITE to NORMAL`);
+        }
+    } else {
+        // Win — same mode continue
+        console.log(`[MODE] Win → staying in ${state.mode}`);
+    }
+
+    console.log(`[HISTORY] ${state.patternHistory.join('')} | Mode: ${state.mode}`);
 }
 
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    return `PATTERN MODE | History: ${state.patternHistory.join('')}`;
+    return `${state.mode} MODE | History: ${state.patternHistory.join('')}`;
 }
-
 async function handleWin(userId, chatId, actual, num) {
     const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
     const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
