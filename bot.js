@@ -498,137 +498,155 @@ return false;
 //  LOGIC
 // ============================================================
 let userStates = {};
+// Helper functions
+function parseNumber(record) {
+    const keys = ["number", "num", "colour", "color", "result"];
+    for (const key of keys) {
+        const val = record[key];
+        if (val !== undefined && val !== null) {
+            try {
+                return parseInt(String(val).trim());
+            } catch (e) {
+                // pass
+            }
+        }
+    }
+    return null;
+}
 
-function initState(userId) {
+function classify(num) {
+    return num >= 5 ? "BIG" : "SMALL";
+}
+
+function getLabels(history, count = 50) {
+    const labels = [];
+    for (let i = 0; i < Math.min(history.length, count); i++) {
+        const n = parseNumber(history[i]);
+        if (n !== null) {
+            labels.push(classify(n));
+        }
+    }
+    return labels;
+}
+
+// User-provided patterns
+const PATTERNS = [
+    ["BBBBS", "S"], ["SSSSS", "B"], ["BBBBB", "S"],
+    ["SSSSSB", "B"], ["SBSBB", "S"], ["SBSBSBS", "B"],
+    ["BSBBB", "S"], ["BSSSS", "B"], ["BBSBS", "S"],
+    ["BSBBS", "S"],
+
+    ["BBSSS", "S"], ["SBBSS", "B"], ["SBSSS", "B"],
+    ["BBSB", "S"], ["SSBB", "B"], ["SBSS", "B"],
+    ["SSSB", "B"], ["BSSB", "S"], ["SBBB", "S"],
+    ["SBSB", "B"], ["BBSS", "S"], ["BSSS", "B"],
+
+    ["SSBSS", "S"], ["BBSBS", "S"], ["SBBBB", "B"],
+    ["BSBBB", "S"], ["BBBBS", "B"], ["SBBBS", "B"],
+    ["SSBSB", "B"], ["SBBSB", "B"], ["SSBBS", "B"],
+    ["BSBSS", "S"], ["SBSSS", "S"], ["SBSBS", "S"],
+    ["BSBSB", "S"], ["BSSBS", "B"],
+
+    ["SSSBB", "B"], ["BBBSS", "S"], ["SBSBB", "S"],
+    ["SSSSB", "B"], ["SSBBB", "S"], ["SSBBS", "B"],
+    ["SBBSB", "S"], ["BBSBS", "S"], ["BBBBBB", "S"],
+    ["BBBB", "S"], ["SBBBS", "S"], ["BBSSSS", "B"],
+    ["SSSSBS", "B"], ["BSSSS", "B"], ["BBSBSB", "S"],
+    ["SSSSSS", "B"],
+
+    ["SSBBBBSS", "B"], ["BSSSSBBB", "S"],
+    ["BSSSBBBS", "S"], ["SSSBBBSS", "B"],
+    ["SSSSBBSS", "B"], ["SSSSSSS", "B"],
+    ["BSSSSSB", "B"], ["BBBBBSB", "S"],
+    ["BBSBSSB", "S"], ["BBBSBSB", "S"],
+    ["BSSSSBB", "B"], ["SBBSSSB", "B"],
+    ["SSBSSSS", "B"], ["SBBSSBS", "B"],
+    ["SSSBBBS", "B"], ["SBSSBBS", "B"],
+
+    // Strategy
+    ["SSSS", "B"], ["BBBB", "S"], ["SBSB", "S"],
+    ["BSBS", "B"], ["SSBB", "S"], ["BBSS", "B"],
+    ["SBBS", "B"], ["BSSB", "S"], ["SSSB", "B"],
+    ["BBBS", "S"], ["SSBS", "B"], ["BBSB", "S"],
+    ["BSSS", "B"]
+];
+
+// --- User State Management ---
+const userStates = {}; // Global object to store user-specific states
+
+function initUser(userId) {
     if (!userStates[userId]) {
-   userStates[userId] = {
-    mode: "NORMAL",
-    recoveryCount: 0,
-    winBeforeLoss: 0,
-    lossStreak: 0
-};
+        userStates[userId] = {
+            history: [], // For tracking win/loss if needed for other logic, but not for betting trigger now
+            mode: "NORMAL", 
+        };
     }
 }
 
-function decidePrediction(list, currentLevel, userId) {
-    
-    if (!list || list.length < 2) {
-        return null;
+// --- Prediction Logic ---
+function decidePrediction(list, level, userId) {
+    initUser(userId);
+
+    const historyLabels = getLabels(list, 50); // Get recent BIG/SMALL labels
+    const historyStr = historyLabels.map(label => label === "BIG" ? "B" : "S").join("");
+
+    let prediction = null;
+    let confidence = 50;
+    let engine = "Pattern Matcher";
+
+    for (const [pattern, predChar] of PATTERNS) {
+        if (historyStr.endsWith(pattern)) {
+            prediction = predChar === "B" ? "BIG" : "SMALL";
+            confidence = 90; // High confidence for matched patterns
+            engine = `Pattern: ${pattern} -> ${predChar}`;
+            break;
+        }
     }
 
-    initState(userId);
-    const state = userStates[userId];
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L3+: FORCED WIN
-    // ═════════════════════════════════════════════════════════════════════
-    
-
-
-    // ═════════════════════════════════════════════════════════════════════
-    //  L1-L2: NORMAL OR RECOVERY MODE
-    // ═════════════════════════════════════════════════════════════════════
-
-    const currentPeriod = String(list[0].issueNumber);
-    const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
-
-
-// Previous result 0னா prediction வேண்டாம்
-
-
-    // STEP 1: Calculate next period
-    const nextPeriodNum = BigInt(currentPeriod) + 1n;
-    const nextPeriod = nextPeriodNum.toString();
-    const nextLast3Num = parseInt(nextPeriod.slice(-3));
-
-    // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
-    const answer = nextLast3Num * Math.exp(currentResult);
-
-    // STEP 3: Get 14 digits (remove decimal, take first 14)
-    const answerStr = answer.toString();
-    const noDecimal = answerStr.replace('.', '');
-    const first14 = noDecimal.substring(0, 14);
-
-    // STEP 4: Get last digit
-    const lastDigit = parseInt(first14.charAt(first14.length - 1));
-
-    // STEP 5: Apply logic based on MODE
-    let prediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
-
-    // RECOVERY மோட்ல மட்டும் ஆப்போசிட் பண்ணுவோம்
-    if (state.mode === 'RECOVERY') {
-        prediction = (prediction === 'SMALL') ? 'BIG' : 'SMALL';
+    if (!prediction) {
+        // If no pattern matches, default to a simple alternating or random prediction
+        if (historyLabels.length > 0) {
+            prediction = historyLabels[0] === "BIG" ? "SMALL" : "BIG"; // Alternate last result
+            confidence = 60;
+            engine = "Default Alternating";
+        } else {
+            prediction = Math.random() < 0.5 ? "BIG" : "SMALL";
+            confidence = 50;
+            engine = "Random";
+        }
     }
 
-    return { 
-        type: 'SIZE', 
-        val: prediction, 
-        conf: 90, 
-        pat: state.mode 
+    return {
+        type: 'SIZE',
+        val: prediction,
+        conf: confidence,
+        pat: engine
     };
 }
 
 function updateAfterResult(userId, wasWin) {
-    initState(userId);
+    initUser(userId);
     const state = userStates[userId];
 
-
-    // ஹிஸ்ட்ரி மெயின்டைன் பண்ணுவோம் (கடைசி 10 ரிசல்ட்ஸ்)
-    if (!state.history) state.history = [];
+    // History is still tracked, but not used for shouldBet anymore
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 10) state.history.shift();
 
-    const histStr = state.history.join(',');
-
-    // 1. RECOVERY மோட்ல இருக்கும்போது Win வந்தா, ரீசெட் பண்ணிடுவோம்
-    if (state.mode === "RECOVERY") {
-        if (wasWin) {
-            state.mode = "NORMAL";
-            state.history = []; // பிரஷ்ஷா ஆரம்பிக்க ஹிஸ்ட்ரி காலி
-            return;
-        } else {
-            // RECOVERY மோட்ல இருக்கும்போது Loss வந்தா, ஹிஸ்ட்ரியை மெயின்டைன் பண்ணுவோம்
-            // இது புதிய பேட்டர்ன்களைக் கண்டறிய உதவும்
-            // ஆனால், RECOVERY மோட்ல இருக்கும்போது history reset ஆகக்கூடாது.
-            // எனவே, இந்த இடத்தில் history reset செய்வதைத் தவிர்க்கிறோம்.
-            // மேலும், RECOVERY மோட்ல இருக்கும்போது, புதிய பேட்டர்ன்களைக் கண்டறியும் logic கீழே உள்ளது.
-            // இந்த else block-ல் எந்த மாற்றமும் செய்யத் தேவையில்லை.
-        }
-    }
-
-    // 2. பேட்டர்ன் அனாலிசிஸ்
-    // Pattern 1: (W,W,L), (W,W,W,L), (L,L), (W,L) -> RECOVERY
-    if (histStr.endsWith('W,W,L') || histStr.endsWith('W,W,W,L') || histStr.endsWith('L,L') || histStr.endsWith('W,L')) {
-        state.mode = "RECOVERY";
-        state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
-    }
-
-    // Pattern 2: 4+ W followed by L -> NORMAL (ரீசெட் மட்டும்)
-    else if (/(W,W,W,W+),L$/.test(histStr)) {
-        state.mode = "NORMAL";
-        state.history = []; 
-    }
-    // Pattern 3: 4+ L -> RECOVERY
-    else if (/(L,L,L,L+)/.test(histStr)) {
-        state.mode = "RECOVERY";
-        state.history = []; // பேட்டர்ன் ஆக்டிவ் ஆகும்போது ஹிஸ்டரி ரீசெட்
-    }
-    // Default
-    else {
-        state.mode = "NORMAL";
-    }
+    state.mode = "NORMAL";
+    state.recoveryCount = 0; 
 }
-
-
 
 function getStatus(userId) {
-    initState(userId);
+    initUser(userId);
     const state = userStates[userId];
-    return state.mode === 'NORMAL' ? `NORMAL` : `RECOVERY (${state.recoveryCount}/10)`;
+    const hist = state.history.join(',') || "EMPTY";
+    return `History: [${hist}]`;
 }
 
-
-
+function shouldBet(userId) {
+    // User requested to always bet
+    return true;
+}
 
 
 
