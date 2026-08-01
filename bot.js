@@ -527,32 +527,39 @@ function getLabels(history, count = 50) {
     }
     return labels;
 }
+// ============================================================
+//  LOGIC (PATTERN-BASED ONLY — NO RECOVERY)
+// ============================================================
+let userStates = {};
 
-// User-provided patterns
+// ════════════════════════════════════════════════════════════════════
+//  PATTERN DATABASE
+// ════════════════════════════════════════════════════════════════════
 const PATTERNS = [
+    // === Group 1 ===
     ["BBBBS", "S"], ["SSSSS", "B"], ["BBBBB", "S"],
     ["SSSSSB", "B"], ["SBSBB", "S"], ["SBSBSBS", "B"],
     ["BSBBB", "S"], ["BSSSS", "B"], ["BBSBS", "S"],
     ["BSBBS", "S"],
-
+    // === Group 2 ===
     ["BBSSS", "S"], ["SBBSS", "B"], ["SBSSS", "B"],
     ["BBSB", "S"], ["SSBB", "B"], ["SBSS", "B"],
     ["SSSB", "B"], ["BSSB", "S"], ["SBBB", "S"],
     ["SBSB", "B"], ["BBSS", "S"], ["BSSS", "B"],
-
+    // === Group 3 ===
     ["SSBSS", "S"], ["BBSBS", "S"], ["SBBBB", "B"],
     ["BSBBB", "S"], ["BBBBS", "B"], ["SBBBS", "B"],
     ["SSBSB", "B"], ["SBBSB", "B"], ["SSBBS", "B"],
     ["BSBSS", "S"], ["SBSSS", "S"], ["SBSBS", "S"],
     ["BSBSB", "S"], ["BSSBS", "B"],
-
+    // === Group 4 ===
     ["SSSBB", "B"], ["BBBSS", "S"], ["SBSBB", "S"],
     ["SSSSB", "B"], ["SSBBB", "S"], ["SSBBS", "B"],
     ["SBBSB", "S"], ["BBSBS", "S"], ["BBBBBB", "S"],
     ["BBBB", "S"], ["SBBBS", "S"], ["BBSSSS", "B"],
     ["SSSSBS", "B"], ["BSSSS", "B"], ["BBSBSB", "S"],
     ["SSSSSS", "B"],
-
+    // === Group 5 ===
     ["SSBBBBSS", "B"], ["BSSSSBBB", "S"],
     ["BSSSBBBS", "S"], ["SSSBBBSS", "B"],
     ["SSSSBBSS", "B"], ["SSSSSSS", "B"],
@@ -561,8 +568,7 @@ const PATTERNS = [
     ["BSSSSBB", "B"], ["SBBSSSB", "B"],
     ["SSBSSSS", "B"], ["SBBSSBS", "B"],
     ["SSSBBBS", "B"], ["SBSSBBS", "B"],
-
-    // Strategy
+    // === Strategy ===
     ["SSSS", "B"], ["BBBB", "S"], ["SBSB", "S"],
     ["BSBS", "B"], ["SSBB", "S"], ["BBSS", "B"],
     ["SBBS", "B"], ["BSSB", "S"], ["SSSB", "B"],
@@ -570,86 +576,105 @@ const PATTERNS = [
     ["BSSS", "B"]
 ];
 
-// --- User State Management ---
-const userStates = {}; // Global object to store user-specific states
-
-function initUser(userId) {
+function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            history: [], // For tracking win/loss if needed for other logic, but not for betting trigger now
-            mode: "NORMAL", 
+            patternHistory: []  // B/S sequence — NEWEST LAST
         };
     }
 }
 
-// --- Prediction Logic ---
-function decidePrediction(list, level, userId) {
-    initUser(userId);
+// ════════════════════════════════════════════════════════════════════
+//  PATTERN MATCHER — Longest match first
+// ════════════════════════════════════════════════════════════════════
+function matchPattern(patternHistory) {
+    const str = patternHistory.join("");
 
-    const historyLabels = getLabels(list, 50); // Get recent BIG/SMALL labels
-    const historyStr = historyLabels.map(label => label === "BIG" ? "B" : "S").join("");
+    // Longest pattern first — more specific match gets priority
+    const sorted = [...PATTERNS].sort((a, b) => b[0].length - a[0].length);
 
-    let prediction = null;
-    let confidence = 50;
-    let engine = "Pattern Matcher";
-
-    for (const [pattern, predChar] of PATTERNS) {
-        if (historyStr.endsWith(pattern)) {
-            prediction = predChar === "B" ? "BIG" : "SMALL";
-            confidence = 90; // High confidence for matched patterns
-            engine = `Pattern: ${pattern} -> ${predChar}`;
-            break;
+    for (const [pattern, result] of sorted) {
+        if (str.endsWith(pattern)) {
+            return {
+                pattern: pattern,
+                result: result  // "B" or "S"
+            };
         }
     }
-
-    if (!prediction) {
-        // If no pattern matches, default to a simple alternating or random prediction
-        if (historyLabels.length > 0) {
-            prediction = historyLabels[0] === "BIG" ? "SMALL" : "BIG"; // Alternate last result
-            confidence = 60;
-            engine = "Default Alternating";
-        } else {
-            prediction = Math.random() < 0.5 ? "BIG" : "SMALL";
-            confidence = 50;
-            engine = "Random";
-        }
-    }
-
-    return {
-        type: 'SIZE',
-        val: prediction,
-        conf: confidence,
-        pat: engine
-    };
+    return null;
 }
 
-function updateAfterResult(userId, wasWin) {
-    initUser(userId);
+// ════════════════════════════════════════════════════════════════════
+//  DECIDE PREDICTION (PATTERN-BASED ONLY)
+// ════════════════════════════════════════════════════════════════════
+function decidePrediction(list, currentLevel, userId) {
+
+    if (!list || list.length < 8) {
+        return null;
+    }
+
+    initState(userId);
     const state = userStates[userId];
 
-    // History is still tracked, but not used for shouldBet anymore
-    state.history.push(wasWin ? 'W' : 'L');
-    if (state.history.length > 10) state.history.shift();
+    // Build B/S sequence from recent results (oldest first)
+    const recent = list.slice(0, 10);
 
-    state.mode = "NORMAL";
-    state.recoveryCount = 0; 
+    const patternHistory = recent
+        .map(item => {
+            const n = parseInt(item.number || item.winNumber || 0);
+            if (isNaN(n)) return null;
+            return n >= 5 ? "B" : "S";
+        })
+        .filter(x => x !== null)
+        .reverse(); // oldest first
+
+    if (patternHistory.length < 4) {
+        return null;
+    }
+
+    // Match against PATTERNS database
+    const match = matchPattern(patternHistory);
+
+    if (match) {
+        const prediction = match.result === "B" ? "BIG" : "SMALL";
+        console.log(`[PATTERN] "${patternHistory.join('')}" ends with "${match.pattern}" → ${prediction}`);
+        return {
+            type: 'SIZE',
+            val: prediction,
+            conf: 90,
+            pat: match.pattern + '→' + match.result
+        };
+    }
+
+    // No pattern matched — SKIP, no prediction
+    return null;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  UPDATE AFTER RESULT — Update pattern history with actual result
+// ════════════════════════════════════════════════════════════════════
+function updateAfterResult(userId, wasWin, actualSize) {
+    initState(userId);
+    const state = userStates[userId];
+
+    // Update patternHistory with actual B/S result
+    if (actualSize === "BIG" || actualSize === "B") {
+        state.patternHistory.push("B");
+    } else {
+        state.patternHistory.push("S");
+    }
+
+    // Keep last 15 results for pattern matching
+    if (state.patternHistory.length > 15) {
+        state.patternHistory.shift();
+    }
 }
 
 function getStatus(userId) {
-    initUser(userId);
+    initState(userId);
     const state = userStates[userId];
-    const hist = state.history.join(',') || "EMPTY";
-    return `History: [${hist}]`;
+    return `PATTERN MODE | History: ${state.patternHistory.join('')}`;
 }
-
-function shouldBet(userId) {
-    // User requested to always bet
-    return true;
-}
-
-
-
-
 
 
 async function handleWin(userId, chatId, actual, num) {
