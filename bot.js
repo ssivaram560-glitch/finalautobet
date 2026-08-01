@@ -1300,12 +1300,12 @@ function addHandlers(){
     autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
 
     // 🔴 FIX: Load previous B/S history from API before starting
-    const prevList = await fetchList();
-    if (prevList && prevList.length >= 4) {
-        initState(id);
-       userStates[id].resultHistory = buildBSFromList(prevList, 15);
-        await send(msg.chat.id, "📋 Loaded history: " + userStates[id].patternHistory.join(''));
-    }
+   const prevList = await fetchList();
+            if (prevList && prevList.length >= 4) {
+                initState(id);
+                userStates[id].resultHistory = buildBSFromList(prevList, 15);
+                await send(msg.chat.id, "📋 Loaded history: " + (userStates[id].resultHistory || []).join(''));
+            }
 
     const cfg=autobetCfg[id];
     await send(msg.chat.id,
