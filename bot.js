@@ -658,23 +658,29 @@ function updateAfterResult(userId, wasWin, actualSize) {
         state.resultHistory.shift();
     }
 
-    if (wasWin) {
-        // WIN → Reset level to 1, continue same mode
-        if (st) st.level = 1;
-        state.skipCount = 0;
-        console.log(`[WIN] Reset to L1 | Mode: ${state.currentMode || 'SAME'} | History: ${state.resultHistory.join('')}`);
-    } else {
-        // LOSS → Level up
-        if (st) st.level = (st.level || 1) + 1;
-        console.log(`[LOSS] Level up to L${st.level} | History: ${state.resultHistory.join('')}`);
+    if (!st) return;
 
-        // L3 loss → 15 skip → Level 4 ku start
-        if (st.level > 3) {
-            state.skipCount = 15;
-            // DON'T reset to L1 — L3 loss after skip L4 ku start
-            // st.level stays at 4 (already incremented)
-            console.log(`[SKIP SET] L3 loss → 15 predictions skipped → will start from L${st.level}`);
+    if (wasWin) {
+        // WIN → Reset level to 1
+        st.level = 1;
+        st.consecutiveLoss = 0;
+        st.inMart = false;
+        state.skipCount = 0;
+        console.log(`[WIN] Reset to L1 | History: ${state.resultHistory.join('')}`);
+    } else {
+        // LOSS → Update internal counters
+        st.consecutiveLoss++;
+        
+        // L3 loss → Set skip count
+        // We check current level BEFORE it is incremented by handleLoss
+        if (st.level === 3) {
+            state.skipCount = 8;
+            console.log(`[SKIP SET] L3 loss detected → 8 predictions will be skipped`);
         }
+        
+        // NOTE: We do NOT increment st.level here. 
+        // handleLoss will handle the level increment for real bets.
+        console.log(`[LOSS] Level remains L${st.level} (Waiting for handleLoss to increment)`);
     }
 }
 function getStatus(userId) {
@@ -686,62 +692,84 @@ function getStatus(userId) {
     return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
 }
 async function handleWin(userId, chatId, actual, num) {
-    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
-    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
-    st.level=1;st.inMart=false;st.consecutiveLoss=0;
+    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
+    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+    const profit = amt * 0.98;
+
+    pt.totalBets++;
+    pt.wins++;
+    pt.pnl += profit;
+    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++;
+    pt.lossStreak = 0;
+    if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
+
+    // Reset state
+    st.level = 1;
+    st.inMart = false;
+    st.consecutiveLoss = 0;
+
     await send(chatId,
-"╔══════════════════════════╗\n"+
-"║  ✅ WIN! 🎉              ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Number : "+num+"\n"+
-"║ Result : "+actual+"\n"+
-"║ Profit : +₹"+profit.toFixed(2)+"\n"+
-"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"║ Streak : "+pt.winStreak+" wins\n"+
-"║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
-"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
-"╚══════════════════════════╝"
+        "╔══════════════════════════╗\n" +
+        "║  ✅ WIN! 🎉              ║\n" +
+        "╠══════════════════════════╣\n" +
+        "║ Number : " + num + "\n" +
+        "║ Result : " + actual + "\n" +
+        "║ Profit : +₹" + profit.toFixed(2) + "\n" +
+        "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
+        "║ Streak : " + pt.winStreak + " wins\n" +
+        "║ Total  : " + pt.wins + "W/" + pt.losses + "L\n" +
+        "║ Reset  : L1 | Watch 0/" + cfg.watchLoss + "\n" +
+        "╚══════════════════════════╝"
     );
-    await sendSticker(chatId,WIN_STICKER);
+    await sendSticker(chatId, WIN_STICKER);
 }
 
 async function handleLoss(userId, chatId, actual, num) {
-    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
-    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-    pt.totalBets++;pt.losses++;pt.pnl-=amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.lossStreak++;pt.winStreak=0;if(pt.lossStreak>pt.maxL)pt.maxL=pt.lossStreak;
-    if(st.level<cfg.maxLvl){
-        st.level++;st.inMart=true;
-        const next=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
+    // Calculate amount based on the level that just lost
+    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+
+    pt.totalBets++;
+    pt.losses++;
+    pt.pnl -= amt;
+    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.lossStreak++;
+    pt.winStreak = 0;
+    if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
+
+    if (st.level < cfg.maxLvl) {
+        st.level++; // Increment to next level
+        st.inMart = true;
+        const next = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
         await send(chatId,
-"╔══════════════════════════╗\n"+
-"║  ❌ LOSS                 ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Number : "+num+"\n"+
-"║ Result : "+actual+"\n"+
-"║ Loss   : -₹"+amt+"\n"+
-"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"╠══════════════════════════╣\n"+
-"║ Next L"+st.level+" : ₹"+next+"\n"+
-"╚══════════════════════════╝"
+            "╔══════════════════════════╗\n" +
+            "║  ❌ LOSS                 ║\n" +
+            "╠══════════════════════════╣\n" +
+            "║ Number : " + num + "\n" +
+            "║ Result : " + actual + "\n" +
+            "║ Loss   : -₹" + amt + "\n" +
+            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
+            "╠══════════════════════════╣\n" +
+            "║ Next L" + st.level + " : ₹" + next + "\n" +
+            "╚══════════════════════════╝"
         );
-        await sendSticker(chatId,LOSS_STICKER);
+        await sendSticker(chatId, LOSS_STICKER);
     } else {
-        // maxLvl reached — L3 ku apram 15 skip aachi L4 ku varum
-        // so here reset to L1 and inMart=false
-        st.level=1;st.inMart=false;st.consecutiveLoss=0;
+        // Max level reached or cycle finished
+        st.level = 1;
+        st.inMart = false;
+        st.consecutiveLoss = 0;
         await send(chatId,
-"╔══════════════════════════╗\n"+
-"║  💀 MAX LEVEL LOSS       ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Loss   : -₹"+amt+"\n"+
-"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
-"╚══════════════════════════╝"
+            "╔══════════════════════════╗\n" +
+            "║  💀 MAX LEVEL LOSS       ║\n" +
+            "╠══════════════════════════╣\n" +
+            "║ Loss   : -₹" + amt + "\n" +
+            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
+            "║ Reset  : L1 | Watch 0/" + cfg.watchLoss + "\n" +
+            "╚══════════════════════════╝"
         );
-        await sendSticker(chatId,LOSS_STICKER);
+        await sendSticker(chatId, LOSS_STICKER);
     }
 }
 // ============================================================
