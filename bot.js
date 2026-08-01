@@ -1303,7 +1303,7 @@ function addHandlers(){
     const prevList = await fetchList();
     if (prevList && prevList.length >= 4) {
         initState(id);
-        userStates[id].patternHistory = buildPatternFromList(prevList, 15);
+       userStates[id].resultHistory = buildBSFromList(prevList, 15);
         await send(msg.chat.id, "📋 Loaded history: " + userStates[id].patternHistory.join(''));
     }
 
