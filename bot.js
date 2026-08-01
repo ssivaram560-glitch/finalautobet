@@ -588,9 +588,9 @@ function decidePrediction(list, currentLevel, userId) {
             const last4 = checkHist.slice(-4).join('');
             if (last4 === 'SSBB' || last4 === 'BBSS') {
                 // Still SSBB/BBSS — skip count-a 15 ku extend pannu (if not already high)
-                if (state.skipCount < 15) {
-                    state.skipCount = 15;
-                    console.log(`[SKIP EXTEND] Pattern ${last4} still detected — skip extended to 15`);
+                if (state.skipCount < 8) {
+                    state.skipCount = 8;
+                    console.log(`[SKIP EXTEND] Pattern ${last4} still detected — skip extended to 8`);
                 }
             }
         }
@@ -608,8 +608,8 @@ function decidePrediction(list, currentLevel, userId) {
     if (fullHistory.length >= 4) {
         const last4 = fullHistory.slice(-4).join('');
         if (last4 === 'SSBB' || last4 === 'BBSS') {
-            state.skipCount = 15;
-            console.log(`[SKIP] Pattern ${last4} detected — skipping 15 predictions`);
+            state.skipCount = 8;
+            console.log(`[SKIP] Pattern ${last4} detected — skipping 8 predictions`);
             return null; // Skip this prediction too
         }
     }
@@ -641,7 +641,7 @@ function decidePrediction(list, currentLevel, userId) {
         type: 'SIZE',
         val: prediction,
         conf: conf,
-        pat: mode + ' | L' + level + ' | ' + fullHistory.slice(-2).join('') + '→' + prediction
+        pat: mode + ' | L' + level + ' | ' 
     };
 }
 function updateAfterResult(userId, wasWin, actualSize) {
@@ -1337,10 +1337,10 @@ function addHandlers(){
                 if (hist.length >= 4) {
                     const last4 = hist.slice(-4).join('');
                     if (last4 === 'SSBB' || last4 === 'BBSS') {
-                        userStates[id].skipCount = 15;
+                        userStates[id].skipCount = 8;
                         await send(msg.chat.id, 
                             "⚠️ Pattern Detected: " + last4 + "\n" +
-                            "🚫 Skipping next 15 periods...\n" +
+                            "🚫 Skipping next 8 periods...\n" +
                             "💡 Prediction will resume after skip."
                         );
                     }
