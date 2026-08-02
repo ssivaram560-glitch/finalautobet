@@ -552,7 +552,7 @@ function getPredictionFromMode(resultHistory, mode) {
 // ════════════════════════════════════════════════════════════════════
 //  DANGEROUS PATTERNS — checked AFTER skip at next entry
 // ════════════════════════════════════════════════════════════════════
-const DANGEROUS_PATTERNS = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB', 'SSSS', 'BBBB'];
+const DANGEROUS_PATTERNS = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
 
 function checkPattern(resultHistory, length) {
     length = length || 4;
@@ -885,22 +885,20 @@ async function handleWin(userId, chatId, actual, num) {
     }
 
     await send(chatId,
-        "╔══════════════════════════╗\n" +
-        "║  ✅ WIN! 🎉              ║\n" +
-        "╠══════════════════════════╣\n" +
-        "║ Number : " + num + "\n" +
-        "║ Result : " + actual + "\n" +
-        "║ Bet    : L" + winLevel + " ₹" + amt + "\n" +
-        "║ Profit : +₹" + profit.toFixed(2) + "\n" +
-        "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
-        "║ Streak : " + pt.winStreak + " wins\n" +
-        "║ Total  : " + pt.wins + "W/" + pt.losses + "L\n" +
-        "║ Reset  : L1 | Watch 0/" + cfg.watchLoss + "\n" +
-        "╚══════════════════════════╝"
+"╔══════════════════════════╗\n"+
+"║  ✅ WIN! 🎉              ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Number : "+num+"\n"+
+"║ Result : "+actual+"\n"+
+"║ Profit : +₹"+profit.toFixed(2)+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"║ Streak : "+pt.winStreak+" wins\n"+
+"║ Total  : "+pt.wins+"W/"+pt.losses+"L\n"+
+"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
+"╚══════════════════════════╝"
     );
-    await sendSticker(chatId, WIN_STICKER);
+    await sendSticker(chatId,WIN_STICKER);
 }
-
 // ════════════════════════════════════════════════════════════════════
 //  HANDLE LOSS — FIXED: Level display now shows CORRECT current level
 // ════════════════════════════════════════════════════════════════════
@@ -917,42 +915,32 @@ async function handleLoss(userId, chatId, actual, num) {
     if (state && state.inSkipCycle) {
         // Skip cycle just activated (3rd/6th/9th loss)
         await send(chatId,
-            "╔══════════════════════════╗\n" +
-            "║  ❌ LOSS → 🚫 SKIP NOW   ║\n" +
-            "╠══════════════════════════╣\n" +
-            "║ Number : " + num + "\n" +
-            "║ Result : " + actual + "\n" +
-            "║ Bet L" + lossLevel + " : -₹" + lossAmt + "\n" +
-            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
-            "╠══════════════════════════╣\n" +
-            "║ " + st.consecutiveLoss + " consecutive loss\n" +
-            "║ Next 4 periods: SKIP\n" +
-            "║ Level: L" + st.level + " maintained\n" +
-            "║ After skip: Pattern check\n" +
-            "╚══════════════════════════╝"
+"╔══════════════════════════╗\n"+
+"║  ❌ LOSS                 ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Number : "+num+"\n"+
+"║ Result : "+actual+"\n"+
+"║ Loss   : -₹"+amt+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"╠══════════════════════════╣\n"+
+"║ Next L"+st.level+" : ₹"+next+"\n"+
+"╚══════════════════════════╝"
         );
+        await sendSticker(chatId,LOSS_STICKER);
     } else {
-        // Normal loss — st.level already incremented by updateAfterResult
-        // Show which level lost, and which level is NEXT
-        const nextAmt = cfg.customBets[st.level] || (cfg.baseBet * MULT[st.level]);
+        st.level=1;st.inMart=false;st.consecutiveLoss=0;
         await send(chatId,
-            "╔══════════════════════════╗\n" +
-            "║  ❌ LOSS                 ║\n" +
-            "╠══════════════════════════╣\n" +
-            "║ Number : " + num + "\n" +
-            "║ Result : " + actual + "\n" +
-            "║ Bet L" + lossLevel + " : -₹" + lossAmt + "\n" +
-            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
-            "╠══════════════════════════╣\n" +
-            "║ Now    : L" + st.level + "\n" +
-            "║ Next   : L" + (st.level + 1) + " ₹" + nextAmt + "\n" +
-            "║ Consec : " + st.consecutiveLoss + " loss\n" +
-            "╚══════════════════════════╝"
+"╔══════════════════════════╗\n"+
+"║  💀 MAX LEVEL LOSS       ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Loss   : -₹"+amt+"\n"+
+"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
+"╚══════════════════════════╝"
         );
+        await sendSticker(chatId,LOSS_STICKER);
     }
-    await sendSticker(chatId, LOSS_STICKER);
 }
-
 // ════════════════════════════════════════════════════════════════════
 //  CHECK RESULT
 // ════════════════════════════════════════════════════════════════════
