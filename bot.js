@@ -800,7 +800,7 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
     // ════════════════════════════════════════════════════════════════
-    //  WIN → FULL RESET (Level, Martingale, Skip, Flags)
+    //  WIN → FULL RESET
     // ════════════════════════════════════════════════════════════════
     if (wasWin) {
         st.consecutiveLoss = 0;
@@ -811,12 +811,12 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         state.skipCount = 0;
         state.inSkipCycle = false;
         state.patternTriggered = false;
-        console.log(`[USER ${userId}] WIN → Full reset to L1. All skip/pattern flags cleared.`);
+        console.log(`[USER ${userId}] WIN → Full reset to L1.`);
         return;
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  LOSS → LEVEL MAINTAIN (no reset until win)
+    //  LOSS → LEVEL UPDATE
     // ════════════════════════════════════════════════════════════════
     st.consecutiveLoss++;
 
@@ -825,25 +825,20 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     }
 
     if (st.inMart) {
-        // Increment level
+        // First save the CURRENT active level before incrementing, so handleLoss knows what was actually played!
+        st.currentPlayedLevel = st.level;
+
+        // Increment level for the NEXT bet
         st.level++;
 
-        // ════════════════════════════════════════════════════════════
-        //  ★★★ EVERY 3rd CONSECUTIVE LOSS → SKIP CYCLE ★★★
-        // ════════════════════════════════════════════════════════════
-        // consecutiveLoss = 3, 6, 9, 12... → SKIP 4 predictions
-        // After skip → pattern check → dangerous → skip again
         if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
             state.skipCount = 4;
             state.patternTriggered = false;
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive loss → SKIP 4 predictions. Level L${st.level} maintained.`);
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive loss → SKIP 4 predictions.`);
         }
-
-        // DO NOT cap level — maintain until WIN
-        console.log(`[USER ${userId}] Loss at L${st.level - 1} → Level now L${st.level}. Maintained until WIN.`);
     } else {
-        // WATCH PHASE
+        st.currentPlayedLevel = 1;
         if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
             st.inMart = true;
             st.level = 1;
@@ -900,19 +895,13 @@ async function handleWin(userId, chatId, actual, num) {
     await sendSticker(chatId,WIN_STICKER);
 }
 // ════════════════════════════════════════════════════════════════════
-//  HANDLE LOSS — FIXED: Level display now shows CORRECT current level
-// ════════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════════
-//  HANDLE LOSS — FIXED
-// ════════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════════
-//  HANDLE LOSS — FIXED
-// ════════════════════════════════════════════════════════════════════
 async function handleLoss(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     const state = userStates[userId];
 
-    const lossAmt = st.lastBetAmount || cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+    // Use the exact level and amount that was played in this round
+    const playedLevel = st.currentPlayedLevel || st.lastBetLevel || 1;
+    const lossAmt = st.lastBetAmount || cfg.customBets[playedLevel - 1] || (cfg.baseBet * MULT[playedLevel - 1]);
     
     pt.totalBets++; 
     pt.losses++; 
@@ -922,18 +911,17 @@ async function handleLoss(userId, chatId, actual, num) {
     pt.winStreak = 0; 
     if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
-    // Calculate next step bet amount for display
+    // Calculate the NEXT level's bet amount accurately for display
     const nextBetAmt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
 
-    // Check if it's a skip cycle or a normal Martingale continuation step
     if (state && state.inSkipCycle) {
-        // Skip cycle activated (e.g., 3rd/6th/9th loss)
         await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ❌ LOSS (SKIP ACTIVE)   ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
+"║ Played : L"+playedLevel+" (₹"+lossAmt+")\n"+
 "║ Loss   : -₹"+lossAmt+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "╠══════════════════════════╣\n"+
@@ -942,13 +930,13 @@ async function handleLoss(userId, chatId, actual, num) {
         );
         await sendSticker(chatId, LOSS_STICKER);
     } else {
-        // Normal Martingale step loss (Level 1, Level 2, etc. continuing up)
         await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ❌ LOSS                 ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
+"║ Played : L"+playedLevel+" (₹"+lossAmt+")\n"+
 "║ Loss   : -₹"+lossAmt+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "╠══════════════════════════╣\n"+
