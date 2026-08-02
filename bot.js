@@ -602,7 +602,7 @@ function updateAfterResult(userId, wasWin, actualSize) {
         // If it was a win or not a multiple of 3, we don't trigger a new skip
         // (If a skip was already in progress, runPredict will continue it)
     }
-}
+
     }
 }
 
