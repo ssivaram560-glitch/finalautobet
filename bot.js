@@ -483,7 +483,6 @@ return false;
 //  LOGIC — PREDICTION MODE + 3 LOSS → 4 SKIP → PATTERN CHECK → LOOP
 //  Level MAINTAINS until WIN. Skip-Pattern cycle runs until WIN.
 // ============================================================
-
 // ════════════════════════════════════════════════════════════════════
 //  INIT STATE — Safe
 // ════════════════════════════════════════════════════════════════════
@@ -550,14 +549,14 @@ function getPredictionFromMode(resultHistory, mode) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  DANGEROUS PATTERNS — checked AFTER skip at next entry
+//  DANGEROUS PATTERNS — strictly based on previous 4 results
 // ════════════════════════════════════════════════════════════════════
 const DANGEROUS_PATTERNS = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
 
-function checkPattern(resultHistory, length) {
-    length = length || 4;
-    if (resultHistory.length < length) return { isDangerous: false, pattern: '' };
-    const pattern = resultHistory.slice(-length).join('');
+function checkPattern(resultHistory) {
+    if (resultHistory.length < 4) return { isDangerous: false, pattern: '' };
+    // Take exactly the last 4 results
+    const pattern = resultHistory.slice(-4).join('');
     return {
         isDangerous: DANGEROUS_PATTERNS.includes(pattern),
         pattern: pattern
@@ -642,10 +641,13 @@ async function runPredict(userId, chatId) {
     const dragonInfo = szS.count >= 6 ? "🐉 SIZE:" + szS.val + " x" + szS.count : clS.count >= 6 ? "🐉 COLOR:" + clS.val + " x" + clS.count : "";
 
     // ════════════════════════════════════════════════════════════════════
-    //  INIT STATE
+    //  INIT STATE & SYNC HISTORY
     // ════════════════════════════════════════════════════════════════════
     initState(userId);
     const state = userStates[userId];
+
+    // Always keep resultHistory updated from current API list (last 10 results)
+    state.resultHistory = buildBSFromList(list, 10);
 
     // ════════════════════════════════════════════════════════════════════
     //  ★★★ SKIP CYCLE ACTIVE → Count down skips ★★★
@@ -667,32 +669,31 @@ async function runPredict(userId, chatId) {
             );
         }
 
-        // Skip finished → NOW check patterns
+        // Skip finished → NOW check patterns using previous 4 results
         if (state.skipCount <= 0) {
             state.inSkipCycle = false;
             state.skipCount = 0;
-            state.patternTriggered = true; // Next prediction → pattern check
+            state.patternTriggered = true; 
             console.log(`[USER ${userId}] Skip cycle done → Pattern check triggered for next entry.`);
         }
         return setTimeout(() => runPredict(userId, chatId), 20000);
     }
 
     // ════════════════════════════════════════════════════════════════════
-    //  ★★★ PATTERN TRIGGERED → Check patterns at this entry ★★★
+    //  ★★★ PATTERN TRIGGERED → Check previous 4 results at this entry ★★★
     // ════════════════════════════════════════════════════════════════════
     if (state.patternTriggered && st.inMart) {
         state.patternTriggered = false;
-        const patResult = checkPattern(state.resultHistory, 4);
+        const patResult = checkPattern(state.resultHistory);
 
         if (patResult.isDangerous) {
-            // DANGEROUS → Skip 4 more predictions (loop!)
             console.log(`[USER ${userId}] Pattern ${patResult.pattern} DANGEROUS → SKIP 4 again. Level L${st.level} maintained.`);
             state.inSkipCycle = true;
             state.skipCount = 4;
 
             await send(chatId,
                 "╔══════════════════════════╗\n" +
-                "║   ⚠️ DANGEROUS PATTERN  ║\n" +
+                "║   ⚠️ DANGEROUS PATTERN   ║\n" +
                 "╠══════════════════════════╣\n" +
                 "║ Pattern: " + patResult.pattern + "\n" +
                 "║ Action : SKIP 4 more\n" +
@@ -702,7 +703,6 @@ async function runPredict(userId, chatId) {
             );
             return setTimeout(() => runPredict(userId, chatId), 20000);
         } else {
-            // SAFE → Continue betting at current level
             console.log(`[USER ${userId}] Pattern ${patResult.pattern} SAFE → Continue L${st.level}.`);
             await send(chatId,
                 "╔══════════════════════════╗\n" +
@@ -756,7 +756,7 @@ async function runPredict(userId, chatId) {
 
     await send(chatId,
         "╔══════════════════════════╗\n" +
-        "║   👑 EARN WITH ME AI    ║\n" +
+        "║   👑 EARN WITH ME AI     ║\n" +
         "╠══════════════════════════╣\n" +
         "║ Period  : " + next.slice(-6) + "\n" +
         "║ Signal  : " + predDisplay + "\n" +
@@ -774,7 +774,6 @@ async function runPredict(userId, chatId) {
     if (cfg.enabled) {
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
-            // STORE the actual placed level and amount BEFORE level gets mutated
             st.lastBetLevel = st.level;
             st.lastBetAmount = result.amt;
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
@@ -825,10 +824,7 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     }
 
     if (st.inMart) {
-        // First save the CURRENT active level before incrementing, so handleLoss knows what was actually played!
         st.currentPlayedLevel = st.level;
-
-        // Increment level for the NEXT bet
         st.level++;
 
         if (st.consecutiveLoss % 3 === 0) {
@@ -864,15 +860,12 @@ function getStatus(userId) {
 // ════════════════════════════════════════════════════════════════════
 async function handleWin(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
-    // Use lastBetAmount (amount that was ACTUALLY placed, before level was mutated)
     const amt = st.lastBetAmount || cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
     const profit = amt * 0.98;
     pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.winStreak++; pt.lossStreak = 0; if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
-    const winLevel = st.lastBetLevel || st.level;
     st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
 
-    // Clear ALL skip/pattern flags on win
     if (userStates[userId]) {
         userStates[userId].skipCount = 0;
         userStates[userId].inSkipCycle = false;
@@ -894,12 +887,14 @@ async function handleWin(userId, chatId, actual, num) {
     );
     await sendSticker(chatId,WIN_STICKER);
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  HANDLE LOSS
 // ════════════════════════════════════════════════════════════════════
 async function handleLoss(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     const state = userStates[userId];
 
-    // Use the exact level and amount that was played in this round
     const playedLevel = st.currentPlayedLevel || st.lastBetLevel || 1;
     const lossAmt = st.lastBetAmount || cfg.customBets[playedLevel - 1] || (cfg.baseBet * MULT[playedLevel - 1]);
     
@@ -911,7 +906,6 @@ async function handleLoss(userId, chatId, actual, num) {
     pt.winStreak = 0; 
     if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
-    // Calculate the NEXT level's bet amount accurately for display
     const nextBetAmt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
 
     if (state && state.inSkipCycle) {
@@ -946,6 +940,7 @@ async function handleLoss(userId, chatId, actual, num) {
         await sendSticker(chatId, LOSS_STICKER);
     }
 }
+
 // ════════════════════════════════════════════════════════════════════
 //  CHECK RESULT
 // ════════════════════════════════════════════════════════════════════
@@ -973,7 +968,6 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         const win = predicted === actual;
 
-        // Pass betPlaced flag
         const betPlaced = cfg.enabled && wasReal;
         updateAfterResult(userId, win, actual, betPlaced);
 
@@ -986,7 +980,6 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             if (win) await handleWin(userId, chatId, actual, num);
             else await handleLoss(userId, chatId, actual, num);
 
-            // --- PROFIT STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
                 st.isWaiting = true;
                 st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000);
@@ -1016,8 +1009,6 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
     }, 10000);
 }
-
-
 
 // ============================================================
 //  STATS
