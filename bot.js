@@ -529,119 +529,58 @@ function buildBSFromList(list, count) {
             seq.push(n >= 5 ? "B" : "S");
         }
     }
-    return seq.reverse(); // oldest first
+    return seq.reverse(); // Returns oldest to newest
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  GET MODE FROM LAST 2 RESULTS
-// ════════════════════════════════════════════════════════════════════
+/**
+ * Determines the current trend mode (SAME or OPPOSITE)
+ */
 function getModeFromLast2(resultHistory) {
     if (resultHistory.length < 2) return null;
     const len = resultHistory.length;
     const secondLast = resultHistory[len - 2];
     const last = resultHistory[len - 1];
-
-    // SAME: SS or BB
-    if (secondLast === last) return "SAME";
-    // OPPOSITE: BS or SB
-    return "OPPOSITE";
+    return secondLast === last ? "SAME" : "OPPOSITE";
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  GET PREDICTION FROM MODE
-// ════════════════════════════════════════════════════════════════════
+/**
+ * Predicts the next result based on the detected mode
+ */
 function getPredictionFromMode(resultHistory, mode) {
     if (resultHistory.length < 1) return null;
-    const last = resultHistory[resultHistory.length - 1]; // last actual result
-
-    if (mode === "SAME") {
-        // SS or BB → last result enna irukko adhe prediction
-        return last === "B" ? "BIG" : "SMALL";
-    }
-    if (mode === "OPPOSITE") {
-        // BS or SB → last result opposite
-        return last === "B" ? "SMALL" : "BIG";
-    }
+    const last = resultHistory[resultHistory.length - 1];
+    if (mode === "SAME") return last === "B" ? "BIG" : "SMALL";
+    if (mode === "OPPOSITE") return last === "B" ? "SMALL" : "BIG";
     return null;
 }
 
-function decidePrediction(list, currentLevel, userId) {
+// ============================================================
+//  PREDICTION LOGIC
+// ============================================================
 
-    if (!list || list.length < 4) {
-        return null;
-    }
+function decidePrediction(list) {
+    if (!list || list.length < 4) return null;
 
-    initState(userId);
-    const state = userStates[userId];
-
-    // ─── SKIP CHECK ───
-    // L3 loss or SSBB/BBSS pattern → skip predictions
-    if (state.skipCount > 0) {
-        state.skipCount--;
-        console.log(`[SKIP] Skipping prediction (${state.skipCount} left)`);
-
-        // ─── RE-CHECK SSBB/BBSS during skip ───
-        // Every skip period la check pannum — adutha last 4 results still SSBB/BBSS na continue skip
-        const apiHistory = buildBSFromList(list, 10);
-        const checkHist = [...state.resultHistory, ...apiHistory];
-        if (checkHist.length >= 4) {
-            const last4 = checkHist.slice(-4).join('');
-            if (last4 === 'SSBB' || last4 === 'BBSS') {
-                // Still SSBB/BBSS — skip count-a 15 ku extend pannu (if not already high)
-                if (state.skipCount < 8) {
-                    state.skipCount = 8;
-                    console.log(`[SKIP EXTEND] Pattern ${last4} still detected — skip extended to 8`);
-                }
-            }
-        }
-        return null; // No prediction — just skip
-    }
-
-    // ─── PRE-PREDICTION CHECK — SSBB/BBSS aachu-na skip pannu ───
-    const savedHistory = [...state.resultHistory];
-    const apiHistory = buildBSFromList(list, 10);
-    const fullHistory = [...savedHistory, ...apiHistory];
-
+    const fullHistory = buildBSFromList(list, 10);
     if (fullHistory.length < 2) return null;
 
-    // Check last 4 results for SSBB/BBSS
-    if (fullHistory.length >= 4) {
-        const last4 = fullHistory.slice(-4).join('');
-        if (last4 === 'SSBB' || last4 === 'BBSS') {
-            state.skipCount = 8;
-            console.log(`[SKIP] Pattern ${last4} detected — skipping 8 predictions`);
-            return null; // Skip this prediction too
-        }
+    // Pattern Detection: Skip risky patterns like SSBB or BBSS
+    const last4 = fullHistory.slice(-4).join('');
+    if (last4 === 'SSBB' || last4 === 'BBSS') {
+        return { skip: true, reason: "Pattern " + last4 };
     }
 
-    // Detect mode from last 2 results
     const mode = getModeFromLast2(fullHistory);
-
     if (!mode) return null;
 
-    // Get prediction based on mode
     const prediction = getPredictionFromMode(fullHistory, mode);
-
     if (!prediction) return null;
-
-    // Set confidence based on level
-    const level = autobetState[userId] ? autobetState[userId].level : 1;
-    let conf;
-    if (level === 1) conf = 90;
-    else if (level === 2) conf = 95;
-    else if (level === 3) conf = 99;
-    else conf = 99; // L4+ also 99%
-
-    state.currentMode = mode;
-    state.lastPrediction = prediction;
-
-    console.log(`[PREDICT] History: ...${fullHistory.slice(-4).join('')} | Mode: ${mode} | Predict: ${prediction} | L${level} ${conf}%`);
 
     return {
         type: 'SIZE',
         val: prediction,
-        conf: conf,
-        pat: mode + ' | L' + level + ' | ' 
+        mode: mode,
+        history: fullHistory.slice(-4).join('')
     };
 }
 function updateAfterResult(userId, wasWin, actualSize) {
@@ -658,24 +597,12 @@ function updateAfterResult(userId, wasWin, actualSize) {
         state.resultHistory.shift();
     }
 
-    if (wasWin) {
-        // WIN → Reset level to 1, continue same mode
-        if (st) st.level = 1;
-        state.skipCount = 0;
-        console.log(`[WIN] Reset to L1 | Mode: ${state.currentMode || 'SAME'} | History: ${state.resultHistory.join('')}`);
-    } else {
-        // LOSS → Level up
-        if (st) st.level = (st.level || 1) + 1;
-        console.log(`[LOSS] Level up to L${st.level} | History: ${state.resultHistory.join('')}`);
-
-        // L3 loss → 15 skip → Level 4 ku start
-        if (st.level > 3) {
-            state.skipCount = 15;
-            // DON'T reset to L1 — L3 loss after skip L4 ku start
-            // st.level stays at 4 (already incremented)
-            console.log(`[SKIP SET] L3 loss → 15 predictions skipped → will start from L${st.level}`);
-        }
-    }
+ // The key logic added:
+if (st.level === 4) {
+    state.skipCount = 8;
+    state.waitingForVirtualWin = true; // Wait for a win before sending L4
+    console.log(`[L3 LOSS] Skipping 8 periods + Waiting for Virtual Win before L4`);
+}
 }
 function getStatus(userId) {
     initState(userId);
