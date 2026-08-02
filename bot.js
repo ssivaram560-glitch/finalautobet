@@ -902,6 +902,9 @@ async function handleWin(userId, chatId, actual, num) {
 // ════════════════════════════════════════════════════════════════════
 //  HANDLE LOSS — FIXED: Level display now shows CORRECT current level
 // ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+//  HANDLE LOSS — FIXED
+// ════════════════════════════════════════════════════════════════════
 async function handleLoss(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     const state = userStates[userId];
@@ -909,8 +912,17 @@ async function handleLoss(userId, chatId, actual, num) {
     // Use lastBetAmount (amount that was ACTUALLY placed, before level was mutated by updateAfterResult)
     const lossAmt = st.lastBetAmount || cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
     const lossLevel = st.lastBetLevel || st.level; // Level at which the bet was placed
-    pt.totalBets++; pt.losses++; pt.pnl -= lossAmt; pt.totalBetAmount = (pt.totalBetAmount || 0) + lossAmt;
-    pt.lossStreak++; pt.winStreak = 0; if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
+    
+    pt.totalBets++; 
+    pt.losses++; 
+    pt.pnl -= lossAmt; 
+    pt.totalBetAmount = (pt.totalBetAmount || 0) + lossAmt;
+    pt.lossStreak++; 
+    pt.winStreak = 0; 
+    if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
+
+    // Calculate the next bet amount accurately for display
+    const nextBetAmt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
 
     if (state && state.inSkipCycle) {
         // Skip cycle just activated (3rd/6th/9th loss)
@@ -920,20 +932,22 @@ async function handleLoss(userId, chatId, actual, num) {
 "╠══════════════════════════╣\n"+
 "║ Number : "+num+"\n"+
 "║ Result : "+actual+"\n"+
-"║ Loss   : -₹"+amt+"\n"+
+"║ Loss   : -₹"+lossAmt+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "╠══════════════════════════╣\n"+
-"║ Next L"+st.level+" : ₹"+next+"\n"+
+"║ Next L"+st.level+" : ₹"+nextBetAmt+"\n"+
 "╚══════════════════════════╝"
         );
         await sendSticker(chatId,LOSS_STICKER);
     } else {
-        st.level=1;st.inMart=false;st.consecutiveLoss=0;
+        st.level = 1; 
+        st.inMart = false; 
+        st.consecutiveLoss = 0;
         await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  💀 MAX LEVEL LOSS       ║\n"+
 "╠══════════════════════════╣\n"+
-"║ Loss   : -₹"+amt+"\n"+
+"║ Loss   : -₹"+lossAmt+"\n"+
 "║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
