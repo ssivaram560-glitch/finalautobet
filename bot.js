@@ -61,6 +61,7 @@ let autobetState   = {};
 let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
 let userTokens = {}; 
+let userStates = {};
 
 
 // ============================================================
@@ -591,11 +592,19 @@ function updateAfterResult(userId, wasWin, actualSize) {
     // Push actual B/S to history
     const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
     state.resultHistory.push(bs);
+    if (state.resultHistory.length > 20) state.resultHistory.shift();
 
-    // Keep last 20 results
-    if (state.resultHistory.length > 20) {
-        state.resultHistory.shift();
+    // --- USER LOGIC: 3rd Level Win/Loss ---
+    if (st.level === 3) {
+        if (wasWin) {
+            state.skipCount = 0; // 3rd level win -> Next prediction varanum
+            console.log(`[L3 WIN] Next prediction will be sent.`);
+        } else {
+            state.skipCount = 8; // 3rd level loss -> 8 period skip
+            console.log(`[L3 LOSS] Skipping 8 periods.`);
+        }
     }
+}
 
  // The key logic added:
 if (st.level === 4) {
@@ -698,6 +707,21 @@ function stk(arr, key) {
 async function runPredict(userId, chatId) {
     if(!running[userId])return;
 
+    // --- SKIP LOGIC ---
+    const state = userStates[userId];
+    if (state && state.skipCount > 0) {
+        const list = await fetchList();
+        if (list) {
+            const nextIssue = (BigInt(list[0].issueNumber) + 1n).toString();
+            if (!sentPeriods[userId].has("SKIP_" + nextIssue)) {
+                sentPeriods[userId].add("SKIP_" + nextIssue);
+                state.skipCount--;
+                await send(chatId, `⏭️ Skipping period ${nextIssue.slice(-6)}... (${state.skipCount} left)`);
+            }
+        }
+        return setTimeout(() => runPredict(userId, chatId), 15000);
+    }
+
     // --- NEW: WAITING CHECK ---
     const st = autobetState[userId];
     if (st.isWaiting) {
@@ -747,7 +771,8 @@ async function runPredict(userId, chatId) {
     if(sentPeriods[userId].size>50) sentPeriods[userId]=new Set([...sentPeriods[userId]].slice(-50));
 
     const cfg=autobetCfg[userId];
-    const confBar="🟦".repeat(Math.round(signal.conf/10))+"⬜".repeat(10-Math.round(signal.conf/10));
+    const conf = signal.conf || 90;
+    const confBar="🟦".repeat(Math.round(conf/10))+"⬜".repeat(10-Math.round(conf/10));
     const predDisplay=signal.type==="SIZE"?(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL"):(signal.val==="RED"?"🔴 RED":"🟢 GREEN");
 
     let abLine="🤖 AutoBet: OFF";
@@ -764,8 +789,8 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Signal  : "+predDisplay+"\n"+
-"║ Pattern : "+signal.pat+"\n"+
-"║ Conf    : "+signal.conf+"%\n"+
+    "║ Pattern : "+(signal.pat || signal.history || "N/A")+"\n"+
+    "║ Conf    : "+(signal.conf || "90")+"%\n"+
 "║ "+confBar+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
