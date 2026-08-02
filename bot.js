@@ -623,7 +623,7 @@ function updateAfterResult(userId, wasWin, actualSize) {
 
         // 2. இந்த 3-வது லாஸ் வரும்போது மட்டும் பேட்டர்ன் செக் நடக்கும் (4th Level Entry Check)
         const last4 = state.resultHistory.slice(-4).join('');
-        const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS'];
+        const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'BSSB', 'SBBS'];
         
         if (dangerousPatterns.includes(last4)) {
             state.skipCount = 4; 
@@ -1289,7 +1289,7 @@ if(text==="🔢 Set Watch Losses"){
                 const hist = userStates[id].resultHistory;
                 if (hist.length >= 4) {
                     const last4 = hist.slice(-4).join('');
-                    if (last4 === 'SSBB' || last4 === 'BBSS' || last4 === 'SSSB' || last4 === 'BBBS') {
+                    if (last4 === 'SSBB' || last4 === 'BBSS' || last4 === 'SSSB' || last4 === 'BBBS' || last4 === 'SBBS' || last4 === 'BSSB') {
                         userStates[id].skipCount = 4;
                         await send(msg.chat.id, 
                             "⚠️ Pattern Detected: " + last4 + "\n" +
