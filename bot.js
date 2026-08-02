@@ -632,7 +632,7 @@ function updateAfterResult(userId, wasWin, actualSize) {
     }
     
     // குறிப்பு: பேட்டர்ன் செக் இப்போது if (st.consecutiveLoss === 3) க்கு உள்ளே மட்டுமே உள்ளது.
-    // எனவே மற்ற நேரங்களில் (L1, L2, L4...) இந்த பேட்டர்ன்கள் வந்தாலும் ஸ்கிப் ஆகாது.
+}   // எனவே மற்ற நேரங்களில் (L1, L2, L4...) இந்த பேட்டர்ன்கள் வந்தாலும் ஸ்கிப் ஆகாது.
 
 function getStatus(userId) {
     initState(userId);
