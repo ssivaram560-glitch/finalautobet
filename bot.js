@@ -645,17 +645,12 @@ function getStatus(userId) {
 }
 
 // 2. handleWin - UI & Stats
-async function handleWin(userId, chatId, actual, num, betLevel) {
-    const pt = profitTrack[userId];
-    const cfg = autobetCfg[userId];
-    const amt = cfg.customBets[betLevel-1] || (cfg.baseBet * MULT[betLevel-1]);
-    const profit = amt * 0.98;
-    
-    pt.totalBets++; pt.wins++; pt.pnl += profit; 
-    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++; pt.lossStreak = 0;
-    if(pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
-
+async function handleWin(userId, chatId, actual, num) {
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]),profit=amt*0.98;
+    pt.totalBets++;pt.wins++;pt.pnl+=profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++;pt.lossStreak=0;if(pt.winStreak>pt.maxW)pt.maxW=pt.winStreak;
+    st.level=1;st.inMart=false;st.consecutiveLoss=0;
     await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ✅ WIN! 🎉              ║\n"+
@@ -669,23 +664,17 @@ async function handleWin(userId, chatId, actual, num, betLevel) {
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
     );
-    await sendSticker(chatId, WIN_STICKER);
+    await sendSticker(chatId,WIN_STICKER);
 }
 
-// 3. handleLoss - UI & Stats
-async function handleLoss(userId, chatId, actual, num, betLevel) {
-    const st = autobetState[userId];
-    const pt = profitTrack[userId];
-    const cfg = autobetCfg[userId];
-    const amt = cfg.customBets[betLevel-1] || (cfg.baseBet * MULT[betLevel-1]);
-    
-    pt.totalBets++; pt.losses++; pt.pnl -= amt; 
-    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.lossStreak++; pt.winStreak = 0;
-    if(pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
-
-    if(betLevel < cfg.maxLvl){
-        const next = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
+async function handleLoss(userId, chatId, actual, num) {
+    const st=autobetState[userId],pt=profitTrack[userId],cfg=autobetCfg[userId];
+    const amt=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+    pt.totalBets++;pt.losses++;pt.pnl-=amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.lossStreak++;pt.winStreak=0;if(pt.lossStreak>pt.maxL)pt.maxL=pt.lossStreak;
+    if(st.level<cfg.maxLvl){
+        st.level++;st.inMart=true;
+        const next=cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
         await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ❌ LOSS                 ║\n"+
@@ -698,7 +687,9 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
 "║ Next L"+st.level+" : ₹"+next+"\n"+
 "╚══════════════════════════╝"
         );
+        await sendSticker(chatId,LOSS_STICKER);
     } else {
+        st.level=1;st.inMart=false;st.consecutiveLoss=0;
         await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  💀 MAX LEVEL LOSS       ║\n"+
@@ -708,9 +699,10 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
 "║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
 "╚══════════════════════════╝"
         );
+        await sendSticker(chatId,LOSS_STICKER);
     }
-    await sendSticker(chatId, LOSS_STICKER);
 }
+
 // ============================================================
 //  PREDICT LOOP
 // ============================================================
@@ -735,47 +727,66 @@ function stk(arr, key) {
     return { val, count };
 }
 async function runPredict(userId, chatId) {
-    if(!running[userId]) return;
-    initUser(userId);
-    const state = userStates[userId];
-    const st = autobetState[userId];
-    const cfg = autobetCfg[userId];
+    if(!running[userId])return;
 
-    // Profit Target Check
+    // --- NEW: WAITING CHECK ---
+    const st = autobetState[userId];
     if (st.isWaiting) {
         if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
-            profitTrack[userId].pnl = 0; 
-            await send(chatId, "🔄 Timed Restart! Starting new section...");
+            st.nextStartTime = null;
+            profitTrack[userId].pnl = 0; // Reset P&L for new session
+            await send(chatId, "🔄 Timed Restart! Starting new section now...");
         } else {
-            return setTimeout(()=>runPredict(userId,chatId), 30000);
+            // Waiting period-la iruntha, 1 min kalichi thirumba check pannum
+            return setTimeout(()=>runPredict(userId,chatId), 60000);
         }
     }
 
     const list = await fetchList();
-    if(!list) return setTimeout(()=>runPredict(userId,chatId), 15000);
+    if(!list){
+        await logBoth(chatId, "⚠️ API error — retrying in 15s...");
+        return setTimeout(()=>runPredict(userId,chatId), 15000);
+    }
 
-    const next = (BigInt(list[0].issueNumber)+1n).toString();
-    if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
+    const next   = (BigInt(list[0].issueNumber)+1n).toString();
+    const signal = decidePrediction(list, autobetState[userId].level, userId);
+    const data10=list.slice(0,10).map(parseItem);
+    const szS=stk(data10,"size"),clS=stk(data10,"color");
+    const dragonInfo=szS.count>=6?"🐉 SIZE:"+szS.val+" x"+szS.count:clS.count>=6?"🐉 COLOR:"+clS.val+" x"+clS.count:"";
+
+    if(!signal){
+        const sk="SK_"+next;
+        if(!sentPeriods[userId].has(sk)){
+            sentPeriods[userId].add(sk);
+            await send(chatId,
+"╔══════════════════════════╗\n"+
+"║   ⏭️ SKIP                ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Period : "+next.slice(-6)+"\n"+
+(dragonInfo?"║ "+dragonInfo+"\n":"")+
+"║ No 90%+ pattern\n"+
+"║ Waiting next signal...\n"+
+"╚══════════════════════════╝"
+            );
+        }
+        return setTimeout(()=>runPredict(userId,chatId), 20000);
+    }
+
+    if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 5000);
     sentPeriods[userId].add(next);
+    if(sentPeriods[userId].size>50) sentPeriods[userId]=new Set([...sentPeriods[userId]].slice(-50));
 
-    const signal = decidePrediction(list);
-    if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
+    const cfg=autobetCfg[userId];
+    const confBar="🟦".repeat(Math.round(signal.conf/10))+"⬜".repeat(10-Math.round(signal.conf/10));
+    const predDisplay=signal.type==="SIZE"?(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL"):(signal.val==="RED"?"🔴 RED":"🟢 GREEN");
 
-    let abLine = "🤖 AutoBet: OFF";
-    let canBet = cfg.enabled;
-
-    // --- WATCH LOSS LOGIC ---
-    if (state.skipCount > 0) {
-        abLine = `⏭️ SKIP BET (${state.skipCount} left)`;
-        state.skipCount--;
-        canBet = false;
-    } else if (cfg.watch && !st.inMart) {
-        abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
-        canBet = false;
-    } else if (cfg.enabled) {
+    let abLine="🤖 AutoBet: OFF";
+    if(cfg.enabled){
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-        abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
+        if(st.inMart) abLine="📈 MART L"+st.level+": ₹"+curBet;
+        else if(cfg.watch&&st.consecutiveLoss<cfg.watchLoss) abLine="👀 Watch: "+st.consecutiveLoss+"/"+cfg.watchLoss;
+        else abLine="💰 BET: ₹"+curBet+" L"+st.level;
     }
 
     await send(chatId,
@@ -783,116 +794,99 @@ async function runPredict(userId, chatId) {
 "║   👑 EARN WITH ME AI    ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
-"║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
-"║ Pattern : "+(signal.history || "N/A")+"\n"+
+"║ Signal  : "+predDisplay+"\n"+
+"║ Pattern : "+signal.pat+"\n"+
+"║ Conf    : "+signal.conf+"%\n"+
+"║ "+confBar+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
+"╠══════════════════════════╣\n"+
+"║ BET ON  : "+signal.val+"\n"+
 "╚══════════════════════════╝",
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
-    let betPlaced = false;
-    if (canBet) { 
+    if (cfg.enabled ) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
-            betPlaced = true;
-            // இதோ இந்த மெசேஜ் தான் பெட் கட்டியவுடன் வரும்
-            await send(chatId, "✅ Bet Success! ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
-        } else if (result && !result.ok) {
-            await send(chatId, "❌ Bet Failed: " + (result.msg || "Unknown error"));
+            await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
         }
     }
 
-    checkResult(userId, chatId, next, signal.val, signal.type, betPlaced);
+    checkResult(userId, chatId, next, signal.val, signal.type);
 }
+
 // ============================================================
 //  RESULT CHECKER
 // ============================================================
 
 
 // 4. checkResult - Robust Update & Full UI
-async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
-    let tries = 0;
-    const cfg = autobetCfg[userId];
-    const st = autobetState[userId];
-    const pt = profitTrack[userId];
+async function checkResult(userId, chatId, target, predicted, predType) {
+    let tries=0;
+    const cfg=autobetCfg[userId],st=autobetState[userId],pt=profitTrack[userId];
+    const wasReal=cfg.enabled ;
     
-    const iv = setInterval(async () => {
-        if (!running[userId]) return clearInterval(iv);
-        if (++tries > 25) {
+    const iv=setInterval(async()=>{
+        if(!running[userId])return clearInterval(iv);
+        if(++tries>20){
             clearInterval(iv);
-            await logBoth(chatId, "⏱ Timeout — checking next period...");
-            setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 3000);
+            await logBoth(chatId, "⏱ Timeout — next...");
+            setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},3000);
             return;
         }
-        const list = await fetchList(); if (!list) return;
-        if (BigInt(list[0].issueNumber) < BigInt(target)) return;
+        const list=await fetchList();if(!list)return;
+        if(BigInt(list[0].issueNumber)<BigInt(target))return;
         clearInterval(iv);
 
-        const res = list.find(i => i.issueNumber === target) || list[0];
-        const num = parseInt(res.number || res.winNumber || 0);
+        const res=list.find(i=>i.issueNumber===target)||list[0];
+        const num=parseInt(res.number||res.winNumber||0);
         let actual;
-        if (predType === "SIZE") actual = num >= 5 ? "BIG" : "SMALL";
-        else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
-        
+        if(predType==="SIZE")actual=num>=5?"BIG":"SMALL";
+        else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
         const win = predicted === actual;
-        const betLevel = st.level; // Save current level before update
 
-        // UPDATE LOGIC (Passing betPlaced to fix L1 repetition)
-        updateAfterResult(userId, win, actual, betPlaced);
+        updateAfterResult(userId, win);
 
         const s = stats[userId];
         s.total++;
-        if (win) {
-            s.win++; s.winStreak++; s.lossStreak = 0;
-            if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak;
-        } else {
-            s.loss++; s.lossStreak++; s.winStreak = 0;
-            if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak;
-        }
+        if(win){s.win++;s.winStreak++;s.lossStreak=0;if(s.winStreak>s.maxWinStreak)s.maxWinStreak=s.winStreak;}
+        else{s.loss++;s.lossStreak++;s.winStreak=0;if(s.lossStreak>s.maxLossStreak)s.maxLossStreak=s.lossStreak;}
 
-        if (betPlaced) {
-            // BET RESULT DASHBOARD
-            if (win) await handleWin(userId, chatId, actual, num, betLevel);
-            else await handleLoss(userId, chatId, actual, num, betLevel);
+        if(cfg.enabled && wasReal){
+            if(win) await handleWin(userId,chatId,actual,num);
+            else    await handleLoss(userId,chatId,actual,num);
 
-            // Profit Check
+            // --- NEW: PROFIT STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
-                st.isWaiting = true;
-                st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); 
-                await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
+                st.isWaiting = true;// Intha line-ah mathunga:
+st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calculation
+
+                const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
+                await send(chatId, 
+                    "🎯 TARGET REACHED!\n" +
+                    "Profit: ₹" + pt.pnl.toFixed(2) + "\n\n" +
+                    "🛑 Bot Paused.\n" +
+                    "⏳ Delay: " + cfg.restartDelay + " hour(s)\n" +
+                    "🔄 Next Section: " + restartTimeStr
+                );
             }
+
+        } else if (cfg.enabled && !wasReal) {
+            if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
+            else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
         } else {
-            // WATCH RESULT DASHBOARD (Full details as requested)
-            if (win) {
-                await send(chatId, 
-                    "╔══════════════════════════╗\n"+
-                    "║  👀 WATCH RESULT: WIN! ✅ ║\n"+
-                    "╠══════════════════════════╣\n"+
-                    "║ Number : "+num+"\n"+
-                    "║ Result : "+actual+"\n"+
-                    "║ Status : Correct Prediction\n"+
-                    "╚══════════════════════════╝"
-                );
-                await sendSticker(chatId, WIN_STICKER);
+            if(win){
+                await send(chatId,"✅ WIN! #"+num+" "+actual+"\n🔥 "+s.winStreak+" streak");
+                await sendSticker(chatId,WIN_STICKER);
             } else {
-                await send(chatId, 
-                    "╔══════════════════════════╗\n"+
-                    "║  👀 WATCH RESULT: LOSS ❌ ║\n"+
-                    "╠══════════════════════════╣\n"+
-                    "║ Number : "+num+"\n"+
-                    "║ Result : "+actual+"\n"+
-                    "║ Status : Incorrect Prediction\n"+
-                    "╚══════════════════════════╝"
-                );
-                await sendSticker(chatId, LOSS_STICKER);
+                await send(chatId,"❌ LOSS #"+num+" "+actual+"\n💔 "+s.lossStreak+" loss");
+                await sendSticker(chatId,LOSS_STICKER);
             }
         }
-
-        setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
-    }, 10000);
+        setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},8000);
+    },10000);
 }
-
 
 // ============================================================
 //  STATS
