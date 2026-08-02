@@ -578,7 +578,7 @@ function decidePrediction(list) {
     };
 }
 
-// 1. updateAfterResult - Centralized Level Management
+// 1. updateAfterResult - Stable Level Management
 function updateAfterResult(userId, wasWin, actualSize) {
     initState(userId);
     const state = userStates[userId];
@@ -598,41 +598,41 @@ function updateAfterResult(userId, wasWin, actualSize) {
         st.consecutiveLoss++;
         
         if (st.inMart) {
-            // If already betting, move to next level
+            // MARTINGALE PHASE: Just increment level
             st.level++;
+            
+            // Check for Max Level
             if (st.level > cfg.maxLvl) {
                 st.level = 1;
                 st.consecutiveLoss = 0;
                 st.inMart = false;
             }
+
+            // --- L4 ENTRY CHECK (Safety) ---
+            // If L3 lost (current level is now 4), check patterns
+            if (st.level === 4) {
+                const last4 = state.resultHistory.slice(-4).join('');
+                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'BSSB', 'SBBS'];
+                if (dangerousPatterns.includes(last4)) {
+                    state.skipCount = 4;
+                    console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
+                }
+            }
+            
+            // General 3-Loss Safety Skip (if you want it during Martingale too)
+            // if (st.level === 4) state.skipCount = 4; 
+
         } else {
-            // If watching, check if trigger hit
+            // WATCH PHASE: Check if trigger hit
             if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
                 st.inMart = true;
-                st.level = 1; // Start betting from L1
+                st.level = 1; // Start L1
+                // When starting Martingale, we don't want to skip immediately
+                // even if consecutiveLoss is high from watching.
             }
         }
     }
-
-   // --- UPDATED SKIP LOGIC ---
-    
-    // 1. 3 லாஸ் ஸ்ட்ரீக் வந்தால் எப்போதும் 4 பீரியட் ஸ்கிப் ஆகும் (Safety)
-    if (st.consecutiveLoss === 3) {
-        state.skipCount = 4;
-        console.log(`[USER ${userId}] 3 Loss Streak -> Skipping 4 periods.`);
-
-        // 2. இந்த 3-வது லாஸ் வரும்போது மட்டும் பேட்டர்ன் செக் நடக்கும் (4th Level Entry Check)
-        const last4 = state.resultHistory.slice(-4).join('');
-        const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'BSSB', 'SBBS'];
-        
-        if (dangerousPatterns.includes(last4)) {
-            state.skipCount = 4; 
-            console.log(`[USER ${userId}] Dangerous Pattern ${last4} at Entry -> Skipping.`);
-        }
-    }
-    
-    // குறிப்பு: பேட்டர்ன் செக் இப்போது if (st.consecutiveLoss === 3) க்கு உள்ளே மட்டுமே உள்ளது.
-}   // எனவே மற்ற நேரங்களில் (L1, L2, L4...) இந்த பேட்டர்ன்கள் வந்தாலும் ஸ்கிப் ஆகாது.
+}
 
 function getStatus(userId) {
     initState(userId);
@@ -642,13 +642,11 @@ function getStatus(userId) {
     if (state.skipCount > 0) skipInfo = ` | Skip: ${state.skipCount} remaining`;
     return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
 }
-// 2. handleWin - UI & Stats only
+
+// 2. handleWin - UI & Stats
 async function handleWin(userId, chatId, actual, num, betLevel) {
-    const st = autobetState[userId];
     const pt = profitTrack[userId];
     const cfg = autobetCfg[userId];
-    
-    // Use the level at which the bet was actually placed
     const amt = cfg.customBets[betLevel-1] || (cfg.baseBet * MULT[betLevel-1]);
     const profit = amt * 0.98;
     
@@ -673,13 +671,11 @@ async function handleWin(userId, chatId, actual, num, betLevel) {
     await sendSticker(chatId, WIN_STICKER);
 }
 
-// 3. handleLoss - UI & Stats only
+// 3. handleLoss - UI & Stats
 async function handleLoss(userId, chatId, actual, num, betLevel) {
     const st = autobetState[userId];
     const pt = profitTrack[userId];
     const cfg = autobetCfg[userId];
-    
-    // Use the level at which the bet was actually placed
     const amt = cfg.customBets[betLevel-1] || (cfg.baseBet * MULT[betLevel-1]);
     
     pt.totalBets++; pt.losses++; pt.pnl -= amt; 
@@ -687,7 +683,6 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     pt.lossStreak++; pt.winStreak = 0;
     if(pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
-    // Show the NEXT level (st.level was already updated in updateAfterResult)
     if(betLevel < cfg.maxLvl){
         const next = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
         await send(chatId,
@@ -715,8 +710,6 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     }
     await sendSticker(chatId, LOSS_STICKER);
 }
-
-
 // ============================================================
 //  PREDICT LOOP
 // ============================================================
@@ -815,7 +808,8 @@ async function runPredict(userId, chatId) {
 //  RESULT CHECKER
 // ============================================================
 
-// 4. checkResult - Captures betLevel before update
+
+// 4. checkResult - Robust Update & Full UI
 async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
     let tries = 0;
     const cfg = autobetCfg[userId];
@@ -826,7 +820,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         if (!running[userId]) return clearInterval(iv);
         if (++tries > 25) {
             clearInterval(iv);
-            await logBoth(chatId, "⏱ Timeout — next...");
+            await logBoth(chatId, "⏱ Timeout — checking next period...");
             setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 3000);
             return;
         }
@@ -841,9 +835,9 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         
         const win = predicted === actual;
-        const betLevel = st.level; // IMPORTANT: Save level before updating
+        const betLevel = st.level; // Current level
 
-        // UPDATE LEVEL
+        // UPDATE LOGIC
         updateAfterResult(userId, win, actual);
 
         const s = stats[userId];
@@ -857,21 +851,25 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         }
 
         if (betPlaced) {
+            // Bet Result Dashboard
             if (win) await handleWin(userId, chatId, actual, num, betLevel);
             else await handleLoss(userId, chatId, actual, num, betLevel);
 
+            // Profit Check
             if (pt.pnl >= cfg.targetProfit) {
                 st.isWaiting = true;
                 st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); 
-                const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
-                await send(chatId, "🎯 TARGET REACHED!\nProfit: ₹" + pt.pnl.toFixed(2) + "\n\n🛑 Bot Paused.\n🔄 Next Section: " + restartTimeStr);
+                await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
             }
-        } else if (cfg.enabled && !betPlaced) {
-            if (win) await send(chatId, "👀 Watch ✅ Correct! (No bet placed)");
-            else await send(chatId, "👀 Watch ❌ Incorrect! (No bet placed)");
         } else {
-            if (win) await send(chatId, "✅ WIN! #" + num + " " + actual);
-            else await send(chatId, "❌ LOSS #" + num + " " + actual);
+            // Watch Result Dashboard (Same UI as Bet but without profit/loss)
+            if (win) {
+                await send(chatId, "👀 WATCH RESULT: ✅ WIN!\nNumber: "+num+"\nResult: "+actual);
+                await sendSticker(chatId, WIN_STICKER);
+            } else {
+                await send(chatId, "👀 WATCH RESULT: ❌ LOSS\nNumber: "+num+"\nResult: "+actual);
+                await sendSticker(chatId, LOSS_STICKER);
+            }
         }
 
         setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
