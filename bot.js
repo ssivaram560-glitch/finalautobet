@@ -844,7 +844,7 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
 
         if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
-            state.skipCount = 4;
+            state.skipCount = 6;
             state.patternTriggered = false;
             console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive loss → SKIP 4 predictions.`);
         }
