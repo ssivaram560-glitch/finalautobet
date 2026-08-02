@@ -495,6 +495,9 @@ return false;
 // ============================================================
 //  LOGIC (SAME / OPPOSITE MODE — 3 LEVEL)
 // ============================================================
+//  LOGIC (PREDICTION MODE + 3 LOSS → 4 SKIP → PATTERN CHECK → LOOP)
+//  Level MAINTAINS until WIN. Skip-Pattern cycle runs until WIN.
+// ============================================================
 
 // ════════════════════════════════════════════════════════════════════
 //  INIT STATE — Safe
@@ -503,9 +506,9 @@ function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
             resultHistory: [],   // actual B/S results (oldest first)
-            skipCount: 0,        // predictions to skip after L3 loss
-            currentMode: null,   // "SAME" or "OPPOSITE"
-            lastPrediction: null
+            skipCount: 0,        // how many predictions still to skip
+            inSkipCycle: false,  // are we inside a skip cycle?
+            patternTriggered: false // skip just ended → need pattern check
         };
     }
     if (!Array.isArray(userStates[userId].resultHistory)) {
@@ -513,6 +516,12 @@ function initState(userId) {
     }
     if (typeof userStates[userId].skipCount !== "number") {
         userStates[userId].skipCount = 0;
+    }
+    if (typeof userStates[userId].inSkipCycle !== "boolean") {
+        userStates[userId].inSkipCycle = false;
+    }
+    if (typeof userStates[userId].patternTriggered !== "boolean") {
+        userStates[userId].patternTriggered = false;
     }
 }
 
@@ -528,7 +537,7 @@ function buildBSFromList(list, count) {
             seq.push(n >= 5 ? "B" : "S");
         }
     }
-    return seq.reverse(); // Returns oldest to newest
+    return seq.reverse();
 }
 
 /**
@@ -553,13 +562,25 @@ function getPredictionFromMode(resultHistory, mode) {
     return null;
 }
 
-// ============================================================
-//  PREDICTION LOGIC
-// ============================================================
+// ════════════════════════════════════════════════════════════════════
+//  DANGEROUS PATTERNS — checked AFTER skip at next entry
+// ════════════════════════════════════════════════════════════════════
+const DANGEROUS_PATTERNS = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB', 'SSSS', 'BBBB'];
 
-// FIX: Original decidePrediction only took `list` as param but was called with 3 args.
-// Now accepts all 3 params but uses only `list` for signal (level/userId for future use).
-function decidePrediction(list, level, userId) {
+function checkPattern(resultHistory, length) {
+    length = length || 4;
+    if (resultHistory.length < length) return { isDangerous: false, pattern: '' };
+    const pattern = resultHistory.slice(-length).join('');
+    return {
+        isDangerous: DANGEROUS_PATTERNS.includes(pattern),
+        pattern: pattern
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PREDICTION LOGIC — SAME/OPPOSITE MODE TRICK
+// ════════════════════════════════════════════════════════════════════
+function decidePrediction(list) {
     if (!list || list.length < 4) return null;
 
     const fullHistory = buildBSFromList(list, 10);
@@ -575,189 +596,22 @@ function decidePrediction(list, level, userId) {
         type: 'SIZE',
         val: prediction,
         mode: mode,
-        conf: 90, // confidence percentage (SAME/OPPOSITE gives ~90% base)
-        pat: mode === "SAME" ? "SAME x2" : "ALT x2",
+        pat: mode + ' MODE',
+        conf: 90,
         history: fullHistory.slice(-4).join('')
     };
 }
 
-
 // ════════════════════════════════════════════════════════════════════
-//  UPDATE AFTER RESULT — Corrected Level Management
+//  RUN PREDICT — MAIN LOOP
 // ════════════════════════════════════════════════════════════════════
-function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
-    initState(userId);
-    const state = userStates[userId];
-    const st = autobetState[userId];
-    const cfg = autobetCfg[userId];
 
-    const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
-    state.resultHistory.push(bs);
-    if (state.resultHistory.length > 20) state.resultHistory.shift();
-
-    if (wasWin) {
-        // Reset everything on win
-        st.consecutiveLoss = 0;
-        st.level = 1;
-        st.inMart = false;
-    } else {
-        st.consecutiveLoss++;
-
-        // CRITICAL FIX: If a bet was placed, we must be in Martingale mode
-        if (betPlaced) {
-            st.inMart = true;
-        }
-
-        if (st.inMart) {
-            // Already betting? Increment level
-            st.level++;
-
-            // Check for Max Level
-            if (st.level > cfg.maxLvl) {
-                st.level = 1;
-                st.consecutiveLoss = 0;
-                st.inMart = false;
-            }
-
-            // --- L4 ENTRY CHECK (Safety) ---
-            // Only check patterns when entering Level 4 (after L3 loss)
-            if (st.level === 4) {
-                const last4 = state.resultHistory.slice(-4).join('');
-                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
-                if (dangerousPatterns.includes(last4)) {
-                    state.skipCount = 4;
-                    console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
-                }
-            }
-        } else {
-            // WATCH PHASE: Check if trigger hit
-            if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
-                st.inMart = true;
-                st.level = 1; // Start L1 for the NEXT period
-            }
-        }
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  GET STATUS
-// ════════════════════════════════════════════════════════════════════
-function getStatus(userId) {
-    initState(userId);
-    const state = userStates[userId];
-    const st = autobetState[userId];
-    let skipInfo = "";
-    if (state.skipCount > 0) skipInfo = ` | Skip: ${state.skipCount} remaining`;
-    return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  HANDLE WIN — UI & Stats
-// ════════════════════════════════════════════════════════════════════
-async function handleWin(userId, chatId, actual, num) {
-    const st = autobetState[userId];
-    const pt = profitTrack[userId];
-    const cfg = autobetCfg[userId];
-
-    // FIX: Use st.level BEFORE resetting (was reset before calculating amount)
-    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
-    const profit = amt * 0.98;
-    pt.totalBets++;
-    pt.wins++;
-    pt.pnl += profit;
-    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.winStreak++;
-    pt.lossStreak = 0;
-    if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
-
-    // Now reset after profit is calculated
-    st.level = 1;
-    st.inMart = false;
-    st.consecutiveLoss = 0;
-
-    await send(chatId,
-        "╔══════════════════════════╗\n" +
-        "║  ✅ WIN! 🎉              ║\n" +
-        "╠══════════════════════════╣\n" +
-        "║ Number : " + num + "\n" +
-        "║ Result : " + actual + "\n" +
-        "║ Profit : +₹" + profit.toFixed(2) + "\n" +
-        "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
-        "║ Streak : " + pt.winStreak + " wins\n" +
-        "║ Total  : " + pt.wins + "W/" + pt.losses + "L\n" +
-        "║ Reset  : L1 | Watch 0/" + cfg.watchLoss + "\n" +
-        "╚══════════════════════════╝"
-    );
-    await sendSticker(chatId, WIN_STICKER);
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  HANDLE LOSS — UI & Stats
-// ════════════════════════════════════════════════════════════════════
-async function handleLoss(userId, chatId, actual, num) {
-    const st = autobetState[userId];
-    const pt = profitTrack[userId];
-    const cfg = autobetCfg[userId];
-
-    // FIX: Use st.level BEFORE incrementing (was incrementing before calculating loss amount)
-    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
-    pt.totalBets++;
-    pt.losses++;
-    pt.pnl -= amt;
-    pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.lossStreak++;
-    pt.winStreak = 0;
-    if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
-
-    if (st.level < cfg.maxLvl) {
-        // FIX: Store next level bet amount before level change
-        const next = cfg.customBets[st.level] || (cfg.baseBet * MULT[st.level]);
-        st.level++;
-        st.inMart = true;
-
-        await send(chatId,
-            "╔══════════════════════════╗\n" +
-            "║  ❌ LOSS                 ║\n" +
-            "╠══════════════════════════╣\n" +
-            "║ Number : " + num + "\n" +
-            "║ Result : " + actual + "\n" +
-            "║ Loss   : -₹" + amt + "\n" +
-            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
-            "╠══════════════════════════╣\n" +
-            "║ Next L" + st.level + " : ₹" + next + "\n" +
-            "╚══════════════════════════╝"
-        );
-        await sendSticker(chatId, LOSS_STICKER);
-    } else {
-        st.level = 1;
-        st.inMart = false;
-        st.consecutiveLoss = 0;
-
-        await send(chatId,
-            "╔══════════════════════════╗\n" +
-            "║  💀 MAX LEVEL LOSS       ║\n" +
-            "╠══════════════════════════╣\n" +
-            "║ Loss   : -₹" + amt + "\n" +
-            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
-            "║ Reset  : L1 | Watch 0/" + cfg.watchLoss + "\n" +
-            "╚══════════════════════════╝"
-        );
-        await sendSticker(chatId, LOSS_STICKER);
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════
-//  PARSE HELPER
-// ════════════════════════════════════════════════════════════════════
 function parseItem(item) {
     const n = +(item.number || item.winNumber || 0);
     return {
         n,
         size: n >= 5 ? "BIG" : "SMALL",
-        color:
-            n === 0 ? "RED" :
-            n === 5 ? "GREEN" :
-            n % 2 === 0 ? "RED" : "GREEN"
+        color: n === 0 ? "RED" : n === 5 ? "GREEN" : n % 2 === 0 ? "RED" : "GREEN"
     };
 }
 
@@ -771,30 +625,20 @@ function stk(arr, key) {
     return { val, count };
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  PREDICT LOOP
-// ════════════════════════════════════════════════════════════════════
 async function runPredict(userId, chatId) {
     if (!running[userId]) return;
 
-    // --- SKIP CHECK ---
-    const state = userStates[userId];
-    if (state && state.skipCount > 0) {
-        state.skipCount--;
-        await send(chatId, `⏭️ SKIP Active — ${state.skipCount} remaining`);
-        return setTimeout(() => runPredict(userId, chatId), 20000);
-    }
+    const st = autobetState[userId];
+    const cfg = autobetCfg[userId];
 
     // --- WAITING CHECK ---
-    const st = autobetState[userId];
     if (st.isWaiting) {
         if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
             st.nextStartTime = null;
-            profitTrack[userId].pnl = 0; // Reset P&L for new session
+            profitTrack[userId].pnl = 0;
             await send(chatId, "🔄 Timed Restart! Starting new section now...");
         } else {
-            // Waiting period-la iruntha, 1 min kalichi thirumba check pannum
             return setTimeout(() => runPredict(userId, chatId), 60000);
         }
     }
@@ -806,11 +650,89 @@ async function runPredict(userId, chatId) {
     }
 
     const next = (BigInt(list[0].issueNumber) + 1n).toString();
-    const signal = decidePrediction(list, st.level, userId);
     const data10 = list.slice(0, 10).map(parseItem);
     const szS = stk(data10, "size"), clS = stk(data10, "color");
-    const dragonInfo = szS.count >= 6 ? "🐉 SIZE:" + szS.val + " x" + szS.count
-        : clS.count >= 6 ? "🐉 COLOR:" + clS.val + " x" + clS.count : "";
+    const dragonInfo = szS.count >= 6 ? "🐉 SIZE:" + szS.val + " x" + szS.count : clS.count >= 6 ? "🐉 COLOR:" + clS.val + " x" + clS.count : "";
+
+    // ════════════════════════════════════════════════════════════════════
+    //  INIT STATE
+    // ════════════════════════════════════════════════════════════════════
+    initState(userId);
+    const state = userStates[userId];
+
+    // ════════════════════════════════════════════════════════════════════
+    //  ★★★ SKIP CYCLE ACTIVE → Count down skips ★★★
+    // ════════════════════════════════════════════════════════════════════
+    if (state.inSkipCycle) {
+        state.skipCount--;
+        const sk = "SK_" + next;
+        if (!sentPeriods[userId].has(sk)) {
+            sentPeriods[userId].add(sk);
+            await send(chatId,
+                "╔══════════════════════════╗\n" +
+                "║   🚫 SKIP ACTIVE         ║\n" +
+                "╠══════════════════════════╣\n" +
+                "║ Period : " + next.slice(-6) + "\n" +
+                "║ Skip   : " + state.skipCount + " more\n" +
+                "║ Level  : L" + st.level + " (maintained)\n" +
+                "║ Status : No bet placed\n" +
+                "╚══════════════════════════╝"
+            );
+        }
+
+        // Skip finished → NOW check patterns
+        if (state.skipCount <= 0) {
+            state.inSkipCycle = false;
+            state.skipCount = 0;
+            state.patternTriggered = true; // Next prediction → pattern check
+            console.log(`[USER ${userId}] Skip cycle done → Pattern check triggered for next entry.`);
+        }
+        return setTimeout(() => runPredict(userId, chatId), 20000);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  ★★★ PATTERN TRIGGERED → Check patterns at this entry ★★★
+    // ════════════════════════════════════════════════════════════════════
+    if (state.patternTriggered && st.inMart) {
+        state.patternTriggered = false;
+        const patResult = checkPattern(state.resultHistory, 4);
+
+        if (patResult.isDangerous) {
+            // DANGEROUS → Skip 4 more predictions (loop!)
+            console.log(`[USER ${userId}] Pattern ${patResult.pattern} DANGEROUS → SKIP 4 again. Level L${st.level} maintained.`);
+            state.inSkipCycle = true;
+            state.skipCount = 4;
+
+            await send(chatId,
+                "╔══════════════════════════╗\n" +
+                "║   ⚠️ DANGEROUS PATTERN  ║\n" +
+                "╠══════════════════════════╣\n" +
+                "║ Pattern: " + patResult.pattern + "\n" +
+                "║ Action : SKIP 4 more\n" +
+                "║ Level  : L" + st.level + " (maintained)\n" +
+                "║ Next   : Pattern check again\n" +
+                "╚══════════════════════════╝"
+            );
+            return setTimeout(() => runPredict(userId, chatId), 20000);
+        } else {
+            // SAFE → Continue betting at current level
+            console.log(`[USER ${userId}] Pattern ${patResult.pattern} SAFE → Continue L${st.level}.`);
+            await send(chatId,
+                "╔══════════════════════════╗\n" +
+                "║   ✅ SAFE PATTERN        ║\n" +
+                "╠══════════════════════════╣\n" +
+                "║ Pattern: " + patResult.pattern + "\n" +
+                "║ Action : Continue L" + st.level + " bet\n" +
+                "║ Level  : Maintained\n" +
+                "╚══════════════════════════╝"
+            );
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  ★★★ NORMAL PREDICTION FLOW ★★★
+    // ════════════════════════════════════════════════════════════════════
+    const signal = decidePrediction(list);
 
     if (!signal) {
         const sk = "SK_" + next;
@@ -834,11 +756,8 @@ async function runPredict(userId, chatId) {
     sentPeriods[userId].add(next);
     if (sentPeriods[userId].size > 50) sentPeriods[userId] = new Set([...sentPeriods[userId]].slice(-50));
 
-    const cfg = autobetCfg[userId];
     const confBar = "🟦".repeat(Math.round(signal.conf / 10)) + "⬜".repeat(10 - Math.round(signal.conf / 10));
-    const predDisplay = signal.type === "SIZE"
-        ? (signal.val === "BIG" ? "🔵 BIG" : "🟠 SMALL")
-        : (signal.val === "RED" ? "🔴 RED" : "🟢 GREEN");
+    const predDisplay = signal.type === "SIZE" ? (signal.val === "BIG" ? "🔵 BIG" : "🟠 SMALL") : (signal.val === "RED" ? "🔴 RED" : "🟢 GREEN");
 
     let abLine = "🤖 AutoBet: OFF";
     if (cfg.enabled) {
@@ -876,13 +795,172 @@ async function runPredict(userId, chatId) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RESULT CHECKER
+//  UPDATE AFTER RESULT — CORE LOGIC
+// ════════════════════════════════════════════════════════════════════
+
+function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
+    initState(userId);
+    const state = userStates[userId];
+    const st = autobetState[userId];
+    const cfg = autobetCfg[userId];
+
+    // Record actual result
+    const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
+    state.resultHistory.push(bs);
+    if (state.resultHistory.length > 20) state.resultHistory.shift();
+
+    // ════════════════════════════════════════════════════════════════
+    //  WIN → FULL RESET (Level, Martingale, Skip, Flags)
+    // ════════════════════════════════════════════════════════════════
+    if (wasWin) {
+        st.consecutiveLoss = 0;
+        st.level = 1;
+        st.inMart = false;
+        state.skipCount = 0;
+        state.inSkipCycle = false;
+        state.patternTriggered = false;
+        console.log(`[USER ${userId}] WIN → Full reset to L1. All skip/pattern flags cleared.`);
+        return;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  LOSS → LEVEL MAINTAIN (no reset until win)
+    // ════════════════════════════════════════════════════════════════
+    st.consecutiveLoss++;
+
+    if (betPlaced) {
+        st.inMart = true;
+    }
+
+    if (st.inMart) {
+        // Increment level
+        st.level++;
+
+        // ════════════════════════════════════════════════════════════
+        //  ★★★ 3 CONSECUTIVE LOSS → ACTIVATE SKIP CYCLE ★★★
+        // ════════════════════════════════════════════════════════════
+        // consecutiveLoss = 3 means L1, L2, L3 all lost
+        // So level is now 4 (L4 reached after 3 losses)
+        if (st.consecutiveLoss === 3) {
+            state.inSkipCycle = true;
+            state.skipCount = 4;
+            state.patternTriggered = false;
+            console.log(`[USER ${userId}] 3 consecutive loss (L4 reached) → SKIP 4 predictions. Level L${st.level} maintained.`);
+        }
+
+        // DO NOT cap level — maintain until WIN
+        console.log(`[USER ${userId}] Loss at L${st.level - 1} → Level now L${st.level}. Maintained until WIN.`);
+    } else {
+        // WATCH PHASE
+        if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
+            st.inMart = true;
+            st.level = 1;
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  GET STATUS
+// ════════════════════════════════════════════════════════════════════
+function getStatus(userId) {
+    initState(userId);
+    const state = userStates[userId];
+    const st = autobetState[userId];
+    let info = "";
+    if (state.inSkipCycle) info = ` | 🚫 SKIP: ${state.skipCount} left`;
+    if (state.patternTriggered) info = " | 🔍 PATTERN CHECK PENDING";
+    return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${info} | ConsecLoss: ${st ? st.consecutiveLoss : 0} | History: ${state.resultHistory.join('')}`;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  HANDLE WIN
+// ════════════════════════════════════════════════════════════════════
+async function handleWin(userId, chatId, actual, num) {
+    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
+    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+    const profit = amt * 0.98;
+    pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.winStreak++; pt.lossStreak = 0; if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
+    st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
+
+    // Clear ALL skip/pattern flags on win
+    if (userStates[userId]) {
+        userStates[userId].skipCount = 0;
+        userStates[userId].inSkipCycle = false;
+        userStates[userId].patternTriggered = false;
+    }
+
+    await send(chatId,
+        "╔══════════════════════════╗\n" +
+        "║  ✅ WIN! 🎉              ║\n" +
+        "╠══════════════════════════╣\n" +
+        "║ Number : " + num + "\n" +
+        "║ Result : " + actual + "\n" +
+        "║ Profit : +₹" + profit.toFixed(2) + "\n" +
+        "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
+        "║ Streak : " + pt.winStreak + " wins\n" +
+        "║ Total  : " + pt.wins + "W/" + pt.losses + "L\n" +
+        "║ Reset  : L1 | Watch 0/" + cfg.watchLoss + "\n" +
+        "╚══════════════════════════╝"
+    );
+    await sendSticker(chatId, WIN_STICKER);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  HANDLE LOSS
+// ════════════════════════════════════════════════════════════════════
+async function handleLoss(userId, chatId, actual, num) {
+    const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
+    const state = userStates[userId];
+    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+    pt.totalBets++; pt.losses++; pt.pnl -= amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
+    pt.lossStreak++; pt.winStreak = 0; if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
+
+    if (state && state.inSkipCycle) {
+        // This is the 3rd loss — skip cycle just activated
+        await send(chatId,
+            "╔══════════════════════════╗\n" +
+            "║  ❌ LOSS (3rd) → SKIP    ║\n" +
+            "╠══════════════════════════╣\n" +
+            "║ Number : " + num + "\n" +
+            "║ Result : " + actual + "\n" +
+            "║ Loss   : -₹" + amt + "\n" +
+            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
+            "╠══════════════════════════╣\n" +
+            "║ 3 consecutive loss\n" +
+            "║ Next 4: SKIP (no bet)\n" +
+            "║ Level: L" + st.level + " maintained\n" +
+            "║ After skip: Pattern check\n" +
+            "╚══════════════════════════╝"
+        );
+    } else {
+        // Normal loss at L1-L3 (or any level)
+        const nextLevel = st.level + 1;
+        const next = cfg.customBets[st.level] || (cfg.baseBet * MULT[st.level]);
+        await send(chatId,
+            "╔══════════════════════════╗\n" +
+            "║  ❌ LOSS                 ║\n" +
+            "╠══════════════════════════╣\n" +
+            "║ Number : " + num + "\n" +
+            "║ Result : " + actual + "\n" +
+            "║ Loss   : -₹" + amt + "\n" +
+            "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
+            "╠══════════════════════════╣\n" +
+            "║ Next L" + nextLevel + " : ₹" + next + "\n" +
+            "║ Level  : Maintained\n" +
+            "║ Consec : " + st.consecutiveLoss + "\n" +
+            "╚══════════════════════════╝"
+        );
+    }
+    await sendSticker(chatId, LOSS_STICKER);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  CHECK RESULT
 // ════════════════════════════════════════════════════════════════════
 async function checkResult(userId, chatId, target, predicted, predType) {
     let tries = 0;
-    const cfg = autobetCfg[userId];
-    const st = autobetState[userId];
-    const pt = profitTrack[userId];
+    const cfg = autobetCfg[userId], st = autobetState[userId], pt = profitTrack[userId];
     const wasReal = cfg.enabled;
 
     const iv = setInterval(async () => {
@@ -904,22 +982,14 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         const win = predicted === actual;
 
-        // FIX: Pass actualSize and betPlaced (wasReal) to updateAfterResult
-        updateAfterResult(userId, win, actual, wasReal);
+        // Pass betPlaced flag
+        const betPlaced = cfg.enabled && wasReal;
+        updateAfterResult(userId, win, actual, betPlaced);
 
         const s = stats[userId];
         s.total++;
-        if (win) {
-            s.win++;
-            s.winStreak++;
-            s.lossStreak = 0;
-            if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak;
-        } else {
-            s.loss++;
-            s.lossStreak++;
-            s.winStreak = 0;
-            if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak;
-        }
+        if (win) { s.win++; s.winStreak++; s.lossStreak = 0; if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak; }
+        else { s.loss++; s.lossStreak++; s.winStreak = 0; if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak; }
 
         if (cfg.enabled && wasReal) {
             if (win) await handleWin(userId, chatId, actual, num);
@@ -928,7 +998,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
             // --- PROFIT STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
                 st.isWaiting = true;
-                st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 60 * 1000); // FIX: Hours -> ms (was *60*1000 = minutes)
+                st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000);
 
                 const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
                 await send(chatId,
@@ -955,6 +1025,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
     }, 10000);
 }
+
 
 // ============================================================
 //  STATS
