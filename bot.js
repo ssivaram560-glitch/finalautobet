@@ -577,7 +577,9 @@ function decidePrediction(list) {
         history: fullHistory.slice(-4).join('')
     };
 }
-// 1. updateAfterResult - Corrected Level Management with Pattern Checking
+
+
+// 1. updateAfterResult - Corrected Level Management
 function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     initState(userId);
     const state = userStates[userId];
@@ -612,18 +614,14 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
                 st.inMart = false;
             }
 
-            // --- L4 ENTRY CHECK (Pattern + Consecutive Loss Safety) ---
-            const last4 = state.resultHistory.slice(-4).join('');
-            const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
-            
-            // Check if it hits 3 consecutive losses OR matches dangerous patterns when entering L4
-            if (st.level === 4 || st.consecutiveLoss >= 3 || dangerousPatterns.includes(last4)) {
-                if (dangerousPatterns.includes(last4) || st.consecutiveLoss >= 3) {
+            // --- L4 ENTRY CHECK (Safety) ---
+            // Only check patterns when entering Level 4 (after L3 loss)
+            if (st.level === 4) {
+                const last4 = state.resultHistory.slice(-4).join('');
+                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
+                if (dangerousPatterns.includes(last4)) {
                     state.skipCount = 4;
-                    st.level = 1;         // Reset level on skip
-                    st.inMart = false;    // Exit mart mode to start tracking safely
-                    st.consecutiveLoss = 0;
-                    console.log(`[USER ${userId}] Triggered Safety Skip! Pattern: ${last4}, Losses: ${st.consecutiveLoss} -> Skipping 4 rounds.`);
+                    console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
                 }
             }
         } else {
@@ -635,6 +633,8 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         }
     }
 }
+
+
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
@@ -845,9 +845,8 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         if(predType==="SIZE")actual=num>=5?"BIG":"SMALL";
         else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
         const win = predicted === actual;
-// Indha line-ah checkResult function kulla thedi replace pannunga:
-const betPlaced = cfg.enabled && st.inMart;
-updateAfterResult(userId, win, actual, betPlaced);
+
+        updateAfterResult(userId, win);
 
         const s = stats[userId];
         s.total++;
