@@ -493,8 +493,6 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 return false;
 }
 // ============================================================
-//  LOGIC (SAME / OPPOSITE MODE — 3 LEVEL)
-// ============================================================
 //  LOGIC (PREDICTION MODE + 3 LOSS → 4 SKIP → PATTERN CHECK → LOOP)
 //  Level MAINTAINS until WIN. Skip-Pattern cycle runs until WIN.
 // ============================================================
@@ -837,15 +835,15 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         st.level++;
 
         // ════════════════════════════════════════════════════════════
-        //  ★★★ 3 CONSECUTIVE LOSS → ACTIVATE SKIP CYCLE ★★★
+        //  ★★★ EVERY 3rd CONSECUTIVE LOSS → SKIP CYCLE ★★★
         // ════════════════════════════════════════════════════════════
-        // consecutiveLoss = 3 means L1, L2, L3 all lost
-        // So level is now 4 (L4 reached after 3 losses)
-        if (st.consecutiveLoss === 3) {
+        // consecutiveLoss = 3, 6, 9, 12... → SKIP 4 predictions
+        // After skip → pattern check → dangerous → skip again
+        if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
             state.skipCount = 4;
             state.patternTriggered = false;
-            console.log(`[USER ${userId}] 3 consecutive loss (L4 reached) → SKIP 4 predictions. Level L${st.level} maintained.`);
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive loss → SKIP 4 predictions. Level L${st.level} maintained.`);
         }
 
         // DO NOT cap level — maintain until WIN
@@ -1025,6 +1023,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
     }, 10000);
 }
+
 
 
 // ============================================================
