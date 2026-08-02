@@ -496,7 +496,7 @@ return false;
 // ============================================================
 //  LOGIC (SAME / OPPOSITE MODE — 3 LEVEL)
 // ============================================================
-
+let userStates = {};
 
 // ════════════════════════════════════════════════════════════════════
 //  INIT STATE — Safe
@@ -594,19 +594,24 @@ function updateAfterResult(userId, wasWin, actualSize) {
     state.resultHistory.push(bs);
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
-    // --- USER LOGIC: 3rd Level Win/Loss ---
-    if (st.level === 3) {
-        if (wasWin) {
-            state.skipCount = 0; // 3rd level win -> Next prediction varanum
-            console.log(`[L3 WIN] Next prediction will be sent.`);
-        } else {
-            state.skipCount = 8; // 3rd level loss -> 8 period skip
-            console.log(`[L3 LOSS] Skipping 8 periods.`);
-        }
+    // --- USER LOGIC: Skip 8 periods on every 3rd level loss (L3, L6, L9) ---
+    if (!wasWin && st.level % 3 === 0) {
+        state.skipCount = 8;
+        console.log(`[L${st.level} LOSS] Skipping 8 periods.`);
+    } else {
+        // If it was a win or not a multiple of 3, we don't trigger a new skip
+        // (If a skip was already in progress, runPredict will continue it)
+    }
+}
     }
 }
 
-
+ // The key logic added:
+if (st.level === 4) {
+    state.skipCount = 8;
+    state.waitingForVirtualWin = true; // Wait for a win before sending L4
+    console.log(`[L3 LOSS] Skipping 8 periods + Waiting for Virtual Win before L4`);
+}
 }
 function getStatus(userId) {
     initState(userId);
