@@ -61,7 +61,7 @@ let autobetState   = {};
 let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
 let userTokens = {}; 
-
+let userStates = {};
 
 
 // ============================================================
@@ -496,7 +496,6 @@ return false;
 // ============================================================
 //  LOGIC (SAME / OPPOSITE MODE — 3 LEVEL)
 // ============================================================
-let userStates = {};
 
 // ════════════════════════════════════════════════════════════════════
 //  INIT STATE — Safe
@@ -598,20 +597,7 @@ function updateAfterResult(userId, wasWin, actualSize) {
     if (!wasWin && st.level % 3 === 0) {
         state.skipCount = 8;
         console.log(`[L${st.level} LOSS] Skipping 8 periods.`);
-    } else {
-        // If it was a win or not a multiple of 3, we don't trigger a new skip
-        // (If a skip was already in progress, runPredict will continue it)
     }
-
-    }
-}
-
- // The key logic added:
-if (st.level === 4) {
-    state.skipCount = 8;
-    state.waitingForVirtualWin = true; // Wait for a win before sending L4
-    console.log(`[L3 LOSS] Skipping 8 periods + Waiting for Virtual Win before L4`);
-}
 }
 function getStatus(userId) {
     initState(userId);
