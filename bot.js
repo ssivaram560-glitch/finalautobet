@@ -578,8 +578,9 @@ function decidePrediction(list) {
     };
 }
 
-// 1. updateAfterResult - Stable Level Management
-function updateAfterResult(userId, wasWin, actualSize) {
+
+// 1. updateAfterResult - Corrected Level Management
+function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     const st = autobetState[userId];
@@ -597,8 +598,13 @@ function updateAfterResult(userId, wasWin, actualSize) {
     } else {
         st.consecutiveLoss++;
         
+        // CRITICAL FIX: If a bet was placed, we must be in Martingale mode
+        if (betPlaced) {
+            st.inMart = true;
+        }
+
         if (st.inMart) {
-            // MARTINGALE PHASE: Just increment level
+            // Already betting? Increment level
             st.level++;
             
             // Check for Max Level
@@ -609,30 +615,25 @@ function updateAfterResult(userId, wasWin, actualSize) {
             }
 
             // --- L4 ENTRY CHECK (Safety) ---
-            // If L3 lost (current level is now 4), check patterns
+            // Only check patterns when entering Level 4 (after L3 loss)
             if (st.level === 4) {
                 const last4 = state.resultHistory.slice(-4).join('');
-                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'BSSB', 'SBBS'];
+                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
                 if (dangerousPatterns.includes(last4)) {
                     state.skipCount = 4;
                     console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
                 }
             }
-            
-            // General 3-Loss Safety Skip (if you want it during Martingale too)
-            // if (st.level === 4) state.skipCount = 4; 
-
         } else {
             // WATCH PHASE: Check if trigger hit
             if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
                 st.inMart = true;
-                st.level = 1; // Start L1
-                // When starting Martingale, we don't want to skip immediately
-                // even if consecutiveLoss is high from watching.
+                st.level = 1; // Start L1 for the NEXT period
             }
         }
     }
 }
+
 
 function getStatus(userId) {
     initState(userId);
@@ -835,10 +836,10 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         
         const win = predicted === actual;
-        const betLevel = st.level; // Current level
+        const betLevel = st.level; // Save current level before update
 
-        // UPDATE LOGIC
-        updateAfterResult(userId, win, actual);
+        // UPDATE LOGIC (Passing betPlaced to fix L1 repetition)
+        updateAfterResult(userId, win, actual, betPlaced);
 
         const s = stats[userId];
         s.total++;
@@ -851,7 +852,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         }
 
         if (betPlaced) {
-            // Bet Result Dashboard
+            // BET RESULT DASHBOARD
             if (win) await handleWin(userId, chatId, actual, num, betLevel);
             else await handleLoss(userId, chatId, actual, num, betLevel);
 
@@ -862,12 +863,28 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
                 await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
             }
         } else {
-            // Watch Result Dashboard (Same UI as Bet but without profit/loss)
+            // WATCH RESULT DASHBOARD (Full details as requested)
             if (win) {
-                await send(chatId, "👀 WATCH RESULT: ✅ WIN!\nNumber: "+num+"\nResult: "+actual);
+                await send(chatId, 
+                    "╔══════════════════════════╗\n"+
+                    "║  👀 WATCH RESULT: WIN! ✅ ║\n"+
+                    "╠══════════════════════════╣\n"+
+                    "║ Number : "+num+"\n"+
+                    "║ Result : "+actual+"\n"+
+                    "║ Status : Correct Prediction\n"+
+                    "╚══════════════════════════╝"
+                );
                 await sendSticker(chatId, WIN_STICKER);
             } else {
-                await send(chatId, "👀 WATCH RESULT: ❌ LOSS\nNumber: "+num+"\nResult: "+actual);
+                await send(chatId, 
+                    "╔══════════════════════════╗\n"+
+                    "║  👀 WATCH RESULT: LOSS ❌ ║\n"+
+                    "╠══════════════════════════╣\n"+
+                    "║ Number : "+num+"\n"+
+                    "║ Result : "+actual+"\n"+
+                    "║ Status : Incorrect Prediction\n"+
+                    "╚══════════════════════════╝"
+                );
                 await sendSticker(chatId, LOSS_STICKER);
             }
         }
