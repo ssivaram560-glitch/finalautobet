@@ -65,13 +65,12 @@ let userStates = {};
 
 
 // ============================================================
-//  LOGGING HELPER (New)
+//  LOGGING HELPER
 // ============================================================
 async function logBoth(chatId, msg, isError = false) {
     if (isError) console.error(msg);
     else console.log(msg);
     if (chatId) {
-        // Use the global bot instance if available
         if (bot) {
             try {
                 await bot.sendMessage(chatId, msg);
@@ -129,7 +128,7 @@ async function getLiveBalance(userId) {
 
 function initUser(id) {
     if (!stats[id])        stats[id]        = { total:0,win:0,loss:0,lossStreak:0,winStreak:0,maxWinStreak:0,maxLossStreak:0 };
-   if (!userStates[id])   userStates[id]   = { resultHistory:[], skipCount:0, currentMode:null, lastPrediction:null };
+   if (!userStates[id])   userStates[id]   = { resultHistory:[], skipCount:0, currentMode:null, lastPrediction:null, inSkipCycle:false, patternTriggered:false };
     if (!sentPeriods[id])  sentPeriods[id]  = new Set();
     if (!autobetCfg[id])   autobetCfg[id]   = { 
         watch:false, 
@@ -138,15 +137,15 @@ function initUser(id) {
         maxLvl:5, 
         enabled:false, 
         customBets:[1,3,9,27,81],
-        targetProfit: 1000,    // NEW: Profit target set panna
-        restartDelay: 1        // NEW: Restart time (hours) set panna
+        targetProfit: 1000,
+        restartDelay: 1
     };
     if (!autobetState[id]) autobetState[id] = { 
         level:1, 
         consecutiveLoss:0, 
         inMart:false,
-        isWaiting: false,      // NEW: Bot waiting-la irukka-nu check panna
-        nextStartTime: null    // NEW: Thirumba eppo start aakanum-nu store panna
+        isWaiting: false,
+        nextStartTime: null
     };
     if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
@@ -337,7 +336,6 @@ async function autoLogin(userId, chatId, silent = false) {
         }
 
         if (capturedToken) {
-            // Success: Update token only when captured
             userTokens[userId] = capturedToken;
             await logBoth(chatId, `✅ [SUCCESS] Token captured successfully for user ${userId}!`);
             return true;
@@ -368,11 +366,6 @@ async function robustLogin(userId, chatId, silent = false) {
 // ============================================================
 //  PLACE BET
 // ============================================================
-// PLACE BET (Modified to capture token from response if available)
-// ============================================================
-// ============================================================
-//  IMPROVED PLACE BET FUNCTION (Silent Retries & Multi-Request Fix)
-// ============================================================
 async function placeBet(userId, chatId, period, prediction, predType, level) {
     let token = getToken(userId);
     if (!token || token.length < 20) {
@@ -389,8 +382,8 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     const betMult = cfg.customBets[level-1] || (cfg.baseBet * MULT[level-1]);
     let bc = "";
 
-    const maxRetries = 3; // Maximum number of retries
-    const retryDelayMs = 2000; // 2 seconds delay between retries
+    const maxRetries = 3;
+    const retryDelayMs = 2000;
 
     if (predType==="SIZE")  bc = prediction==="BIG" ? "BigSmall_Big" : "BigSmall_Small";
     if (predType==="COLOR") bc = prediction==="RED" ? "Color_Red"    : "Color_Green";
@@ -432,18 +425,15 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         const d = r.data;
         console.log(`[BET RESP] code:${d.code} msg:${d.msg}`);
 
-        // Check for a new token in response headers (e.g., 'Authorization' or 'x-auth-token')
-        // This is less common for every bet, but good to check if the API sends it.
         const newTokenFromResponseHeader = r.headers['authorization'] || r.headers['x-auth-token'];
         if (newTokenFromResponseHeader) {
             const cleanNewToken = newTokenFromResponseHeader.replace(/^Bearer\s+/i, "");
-            if (cleanNewToken !== token) { // Only update if it's a different token
+            if (cleanNewToken !== token) {
                 userTokens[userId] = cleanNewToken;
                 console.log("[TOKEN UPDATE] New token captured from bet response headers!");
             }
         }
 
-        // Also check if the token is in the response body (less likely for auth tokens, but possible)
         if (d.data && d.data.token && d.data.token !== token) {
              userTokens[userId] = d.data.token;
              console.log("[TOKEN UPDATE] New token captured from bet response body!");
@@ -455,7 +445,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         if (d.msg && retryableErrors.some(errStr => d.msg.toLowerCase().includes(errStr))) {
             console.log(`[BET RETRY] Retryable error: ${d.msg}. Retrying in ${retryDelayMs / 1000}s... (Attempt ${i + 1}/${maxRetries})`);
             await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-            continue; // Retry
+            continue;
         }
 
         if (d.code===401||d.code===40100||(d.msg&&(d.msg.toLowerCase().includes("token")||d.msg.toLowerCase().includes("expired")))) {
@@ -470,11 +460,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         await send(chatId,"❌ Bet fail: "+(d.msg||JSON.stringify(d).substr(0,60)));
         return false;
     } catch(err) {
-        // Network errors or other exceptions during the request
         console.error("[BET ERR]",err.message);
-        // If it's a network error, we might want to retry as well, but only if it's not a token error.
-        // For now, let's assume network errors are not retryable in the same way as specific API messages.
-        // If the error is token related, handle it as before.
         if (err.response && (err.response.status === 401 || (err.response.data && (err.response.data.msg && (err.response.data.msg.toLowerCase().includes("token") || err.response.data.msg.toLowerCase().includes("expired")))))) {
             
             await send(chatId,"🔄 Token error during bet — Re-login...");
@@ -483,8 +469,6 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
             else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
             return false;
         }
-        // If it's not a token error, and it's a network error, we can consider retrying here too.
-        // For now, we'll just log and exit if it's a general network error after max retries.
         await send(chatId,"❌ Network error during bet: "+err.message);
         return false;
     }
@@ -492,8 +476,9 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 // If all retries fail, return false
 return false;
 }
+
 // ============================================================
-//  LOGIC (PREDICTION MODE + 3 LOSS → 4 SKIP → PATTERN CHECK → LOOP)
+//  LOGIC — PREDICTION MODE + 3 LOSS → 4 SKIP → PATTERN CHECK → LOOP
 //  Level MAINTAINS until WIN. Skip-Pattern cycle runs until WIN.
 // ============================================================
 
@@ -503,10 +488,12 @@ return false;
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            resultHistory: [],   // actual B/S results (oldest first)
-            skipCount: 0,        // how many predictions still to skip
-            inSkipCycle: false,  // are we inside a skip cycle?
-            patternTriggered: false // skip just ended → need pattern check
+            resultHistory: [],
+            skipCount: 0,
+            currentMode: null,
+            lastPrediction: null,
+            inSkipCycle: false,
+            patternTriggered: false
         };
     }
     if (!Array.isArray(userStates[userId].resultHistory)) {
@@ -905,7 +892,7 @@ async function handleWin(userId, chatId, actual, num) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  HANDLE LOSS
+//  HANDLE LOSS — FIXED: Level display now shows CORRECT current level
 // ════════════════════════════════════════════════════════════════════
 async function handleLoss(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
@@ -914,27 +901,31 @@ async function handleLoss(userId, chatId, actual, num) {
     pt.totalBets++; pt.losses++; pt.pnl -= amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.lossStreak++; pt.winStreak = 0; if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
+    // updateAfterResult already incremented st.level, so st.level IS the current level
+    // Do NOT add +1 again!
+
     if (state && state.inSkipCycle) {
-        // This is the 3rd loss — skip cycle just activated
+        // Skip cycle just activated (3rd/6th/9th loss)
         await send(chatId,
             "╔══════════════════════════╗\n" +
-            "║  ❌ LOSS (3rd) → SKIP    ║\n" +
+            "║  ❌ LOSS → 🚫 SKIP NOW   ║\n" +
             "╠══════════════════════════╣\n" +
             "║ Number : " + num + "\n" +
             "║ Result : " + actual + "\n" +
             "║ Loss   : -₹" + amt + "\n" +
             "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
             "╠══════════════════════════╣\n" +
-            "║ 3 consecutive loss\n" +
-            "║ Next 4: SKIP (no bet)\n" +
+            "║ " + st.consecutiveLoss + " consecutive loss\n" +
+            "║ Next 4 periods: SKIP\n" +
             "║ Level: L" + st.level + " maintained\n" +
             "║ After skip: Pattern check\n" +
             "╚══════════════════════════╝"
         );
     } else {
-        // Normal loss at L1-L3 (or any level)
+        // Normal loss — show CORRECT current level (already incremented)
+        // and next bet amount for the NEXT level
         const nextLevel = st.level + 1;
-        const next = cfg.customBets[st.level] || (cfg.baseBet * MULT[st.level]);
+        const nextAmt = cfg.customBets[st.level] || (cfg.baseBet * MULT[st.level]);
         await send(chatId,
             "╔══════════════════════════╗\n" +
             "║  ❌ LOSS                 ║\n" +
@@ -944,9 +935,9 @@ async function handleLoss(userId, chatId, actual, num) {
             "║ Loss   : -₹" + amt + "\n" +
             "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
             "╠══════════════════════════╣\n" +
-            "║ Next L" + nextLevel + " : ₹" + next + "\n" +
-            "║ Level  : Maintained\n" +
-            "║ Consec : " + st.consecutiveLoss + "\n" +
+            "║ Current: L" + st.level + "\n" +
+            "║ Next   : L" + nextLevel + " ₹" + nextAmt + "\n" +
+            "║ Consec : " + st.consecutiveLoss + " loss\n" +
             "╚══════════════════════════╝"
         );
     }
@@ -1079,6 +1070,12 @@ async function autobetStatus(chatId, userId) {
         waitLine = "\n⏳ Waiting: " + diff + " mins to restart";
     }
 
+    // Show skip/pattern status in status message
+    const state = userStates[userId];
+    let skipInfo = "";
+    if (state && state.inSkipCycle) skipInfo = "\n🚫 Skip Active: " + state.skipCount + " left";
+    if (state && state.patternTriggered) skipInfo = "\n🔍 Pattern Check Pending";
+
     send(chatId,
 "🤖 AUTOBET STATUS\n\n"+
 "💰 Live Balance: "+liveBal+"\n"+
@@ -1090,8 +1087,8 @@ async function autobetStatus(chatId, userId) {
 "Base Bet : ₹"+cfg.baseBet+"\n"+
 "Max Level: "+cfg.maxLvl+"\n"+
 "Target Profit: ₹"+cfg.targetProfit+"\n"+
-"Section Delay: "+cfg.restartDelay+" mins"+ // Hours-la irunthu Minutes-ku mathi irukken
-waitLine+"\n"+
+"Section Delay: "+cfg.restartDelay+" mins"+
+waitLine+skipInfo+"\n"+
 "In Mart  : "+(st.inMart?"YES":"NO")+"\n"+
 "P&L      : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n\n"+
 "Mart: ₹"+amounts.join("→₹")
@@ -1370,10 +1367,10 @@ function addHandlers(){
         if(text==="🎯 Set Profit Target"){userAction[id]={action:"settarget"};return send(id,"Enter target profit (Min ₹10):");}
         if(text==="⏳ Set Section Delay"){userAction[id]={action:"setdelay"};return send(id,"Enter restart delay in MINUTES (e.g. 30):");}
         if(text==="📝 Set Custom Bets"){userAction[id]={action:"setcustom"};return send(id,"📝 Enter Custom Bet Sequence (e.g. 1,4,7,9):");}
-if(text==="🔢 Set Watch Losses"){
-    userAction[id]={action:"setwloss"};
-    return send(id,"Enter watch loss count (e.g. 3):");
-}
+        if(text==="🔢 Set Watch Losses"){
+            userAction[id]={action:"setwloss"};
+            return send(id,"Enter watch loss count (e.g. 3):");
+        }
 
         // --- INPUT SAVING LOGIC ---
         if(hasAccess(id) && userAction[id]){
@@ -1402,7 +1399,6 @@ if(text==="🔢 Set Watch Losses"){
                 delete userAction[id];
                 return send(id, "✅ Custom Bets Updated!\nLevels: " + vals.length + "\nSequence: ₹" + vals.join(" → ₹"), {reply_markup: autobetMenu});
             }
-            // ... matha setbase, setlvl code-um ithu kulla thaan varum
         }
 
         // --- IMPORTANT: AWAIT ADDED ---
@@ -1415,41 +1411,43 @@ if(text==="🔢 Set Watch Losses"){
             return send(id,"Token: "+(tok.length>20?"✅ ..."+tok.slice(-12):"❌")+"\nLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n\n/setcreds FULLPHONE PASSWORD\n/setmytoken TOKEN\n/login — Test");
         }
 
-      if(text==="▶️ Start Prediction"){
+        // ════════════════════════════════════════════════════════════════════
+        //  START PREDICTION — FIXED: Full reset of ALL state including skip flags
+        // ════════════════════════════════════════════════════════════════════
+        if(text==="▶️ Start Prediction"){
             if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
             if(running[id])return send(msg.chat.id,"⚠️ Already running!");
             if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
-            running[id]=true;sentPeriods[id]=new Set();
-            autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
+
+            // FULL RESET — ALL state including skip/pattern flags
+            running[id] = true;
+            sentPeriods[id] = new Set();
+            autobetState[id] = { level: 1, consecutiveLoss: 0, inMart: false, isWaiting: false, nextStartTime: null };
+            profitTrack[id] = { totalBets: 0, wins: 0, losses: 0, pnl: 0, winStreak: 0, lossStreak: 0, maxW: 0, maxL: 0, totalBetAmount: 0 };
 
             // Load previous B/S history from API
             const prevList = await fetchList();
             initState(id);
 
+            // FULL RESET of userStates
+            userStates[id] = {
+                resultHistory: [],
+                skipCount: 0,
+                currentMode: null,
+                lastPrediction: null,
+                inSkipCycle: false,
+                patternTriggered: false
+            };
+
             if (prevList && prevList.length >= 4) {
                 // Build B/S history
                 userStates[id].resultHistory = buildBSFromList(prevList, 15);
                 await send(msg.chat.id, "📋 Loaded history: " + (userStates[id].resultHistory || []).join(''));
-
-                // ─── SSBB / BBSS PATTERN CHECK ───
-                // Last 4 results check (oldest first in array, so last 4 = end of array)
-                const hist = userStates[id].resultHistory;
-                if (hist.length >= 4) {
-                    const last4 = hist.slice(-4).join('');
-                    if (last4 === 'SSBB' || last4 === 'BBSS' || last4 === 'SSSB' || last4 === 'BBBS' || last4 === 'SBBS' || last4 === 'BSSB') {
-                        userStates[id].skipCount = 4;
-                        await send(msg.chat.id, 
-                            "⚠️ Pattern Detected: " + last4 + "\n" +
-                            "🚫 Skipping next 4 periods...\n" +
-                            "💡 Prediction will resume after skip."
-                        );
-                    }
-                }
             }
 
             const cfg=autobetCfg[id];
             await send(msg.chat.id,
-"🚀 ENGINE ON!\n\nAutoBet: "+(cfg.enabled?"✅ ON":"❌ OFF")+"\nWatch  : "+(cfg.watch?"ON ("+cfg.watchLoss+"L)":"OFF")+"\nBase   : ₹"+cfg.baseBet+" | MaxLvl: "+cfg.maxLvl
+"🚀 ENGINE ON!\n\nAutoBet: "+(cfg.enabled?"✅ ON":"❌ OFF")+"\nWatch  : "+(cfg.watch?"ON ("+cfg.watchLoss+"L)":"OFF")+"\nBase   : ₹"+cfg.baseBet+" | MaxLvl: "+cfg.maxLvl+"\n\n✅ Level: L1\n✅ Skip: OFF\n✅ Pattern: Cleared"
             );
             runPredict(id,msg.chat.id);
         }
