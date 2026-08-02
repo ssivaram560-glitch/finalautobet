@@ -145,7 +145,9 @@ function initUser(id) {
         consecutiveLoss:0, 
         inMart:false,
         isWaiting: false,
-        nextStartTime: null
+        nextStartTime: null,
+        lastBetLevel: 1,
+        lastBetAmount: 0
     };
     if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
@@ -772,6 +774,9 @@ async function runPredict(userId, chatId) {
     if (cfg.enabled) {
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
+            // STORE the actual placed level and amount BEFORE level gets mutated
+            st.lastBetLevel = st.level;
+            st.lastBetAmount = result.amt;
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
         }
     }
@@ -801,6 +806,8 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         st.consecutiveLoss = 0;
         st.level = 1;
         st.inMart = false;
+        st.lastBetLevel = 1;
+        st.lastBetAmount = 0;
         state.skipCount = 0;
         state.inSkipCycle = false;
         state.patternTriggered = false;
@@ -862,10 +869,12 @@ function getStatus(userId) {
 // ════════════════════════════════════════════════════════════════════
 async function handleWin(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
-    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+    // Use lastBetAmount (amount that was ACTUALLY placed, before level was mutated)
+    const amt = st.lastBetAmount || cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
     const profit = amt * 0.98;
     pt.totalBets++; pt.wins++; pt.pnl += profit; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.winStreak++; pt.lossStreak = 0; if (pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
+    const winLevel = st.lastBetLevel || st.level;
     st.level = 1; st.inMart = false; st.consecutiveLoss = 0;
 
     // Clear ALL skip/pattern flags on win
@@ -881,6 +890,7 @@ async function handleWin(userId, chatId, actual, num) {
         "╠══════════════════════════╣\n" +
         "║ Number : " + num + "\n" +
         "║ Result : " + actual + "\n" +
+        "║ Bet    : L" + winLevel + " ₹" + amt + "\n" +
         "║ Profit : +₹" + profit.toFixed(2) + "\n" +
         "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
         "║ Streak : " + pt.winStreak + " wins\n" +
@@ -897,12 +907,12 @@ async function handleWin(userId, chatId, actual, num) {
 async function handleLoss(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     const state = userStates[userId];
-    const amt = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
-    pt.totalBets++; pt.losses++; pt.pnl -= amt; pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
-    pt.lossStreak++; pt.winStreak = 0; if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
-    // updateAfterResult already incremented st.level, so st.level IS the current level
-    // Do NOT add +1 again!
+    // Use lastBetAmount (amount that was ACTUALLY placed, before level was mutated by updateAfterResult)
+    const lossAmt = st.lastBetAmount || cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+    const lossLevel = st.lastBetLevel || st.level; // Level at which the bet was placed
+    pt.totalBets++; pt.losses++; pt.pnl -= lossAmt; pt.totalBetAmount = (pt.totalBetAmount || 0) + lossAmt;
+    pt.lossStreak++; pt.winStreak = 0; if (pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
     if (state && state.inSkipCycle) {
         // Skip cycle just activated (3rd/6th/9th loss)
@@ -912,7 +922,7 @@ async function handleLoss(userId, chatId, actual, num) {
             "╠══════════════════════════╣\n" +
             "║ Number : " + num + "\n" +
             "║ Result : " + actual + "\n" +
-            "║ Loss   : -₹" + amt + "\n" +
+            "║ Bet L" + lossLevel + " : -₹" + lossAmt + "\n" +
             "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
             "╠══════════════════════════╣\n" +
             "║ " + st.consecutiveLoss + " consecutive loss\n" +
@@ -922,9 +932,8 @@ async function handleLoss(userId, chatId, actual, num) {
             "╚══════════════════════════╝"
         );
     } else {
-        // Normal loss — show CORRECT current level (already incremented)
-        // and next bet amount for the NEXT level
-        const nextLevel = st.level + 1;
+        // Normal loss — st.level already incremented by updateAfterResult
+        // Show which level lost, and which level is NEXT
         const nextAmt = cfg.customBets[st.level] || (cfg.baseBet * MULT[st.level]);
         await send(chatId,
             "╔══════════════════════════╗\n" +
@@ -932,11 +941,11 @@ async function handleLoss(userId, chatId, actual, num) {
             "╠══════════════════════════╣\n" +
             "║ Number : " + num + "\n" +
             "║ Result : " + actual + "\n" +
-            "║ Loss   : -₹" + amt + "\n" +
+            "║ Bet L" + lossLevel + " : -₹" + lossAmt + "\n" +
             "║ P&L    : " + (pt.pnl >= 0 ? "+" : "") + pt.pnl.toFixed(2) + "\n" +
             "╠══════════════════════════╣\n" +
-            "║ Current: L" + st.level + "\n" +
-            "║ Next   : L" + nextLevel + " ₹" + nextAmt + "\n" +
+            "║ Now    : L" + st.level + "\n" +
+            "║ Next   : L" + (st.level + 1) + " ₹" + nextAmt + "\n" +
             "║ Consec : " + st.consecutiveLoss + " loss\n" +
             "╚══════════════════════════╝"
         );
@@ -1422,7 +1431,7 @@ function addHandlers(){
             // FULL RESET — ALL state including skip/pattern flags
             running[id] = true;
             sentPeriods[id] = new Set();
-            autobetState[id] = { level: 1, consecutiveLoss: 0, inMart: false, isWaiting: false, nextStartTime: null };
+            autobetState[id] = { level: 1, consecutiveLoss: 0, inMart: false, isWaiting: false, nextStartTime: null, lastBetLevel: 1, lastBetAmount: 0 };
             profitTrack[id] = { totalBets: 0, wins: 0, losses: 0, pnl: 0, winStreak: 0, lossStreak: 0, maxW: 0, maxL: 0, totalBetAmount: 0 };
 
             // Load previous B/S history from API
