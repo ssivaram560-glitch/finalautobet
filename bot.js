@@ -614,15 +614,25 @@ function updateAfterResult(userId, wasWin, actualSize) {
         }
     }
 
-    // Skip logic
+   // --- UPDATED SKIP LOGIC ---
+    
+    // 1. 3 லாஸ் ஸ்ட்ரீக் வந்தால் எப்போதும் 4 பீரியட் ஸ்கிப் ஆகும் (Safety)
     if (st.consecutiveLoss === 3) {
-        state.skipCount = 8;
+        state.skipCount = 4;
+        console.log(`[USER ${userId}] 3 Loss Streak -> Skipping 4 periods.`);
+
+        // 2. இந்த 3-வது லாஸ் வரும்போது மட்டும் பேட்டர்ன் செக் நடக்கும் (4th Level Entry Check)
+        const last4 = state.resultHistory.slice(-4).join('');
+        const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS'];
+        
+        if (dangerousPatterns.includes(last4)) {
+            state.skipCount = 4; 
+            console.log(`[USER ${userId}] Dangerous Pattern ${last4} at Entry -> Skipping.`);
+        }
     }
-    const last4 = state.resultHistory.slice(-4).join('');
-    if (last4 === 'BBSS' || last4 === 'SSBB') {
-        state.skipCount = 8;
-    }
-}
+    
+    // குறிப்பு: பேட்டர்ன் செக் இப்போது if (st.consecutiveLoss === 3) க்கு உள்ளே மட்டுமே உள்ளது.
+    // எனவே மற்ற நேரங்களில் (L1, L2, L4...) இந்த பேட்டர்ன்கள் வந்தாலும் ஸ்கிப் ஆகாது.
 
 function getStatus(userId) {
     initState(userId);
@@ -1279,11 +1289,11 @@ if(text==="🔢 Set Watch Losses"){
                 const hist = userStates[id].resultHistory;
                 if (hist.length >= 4) {
                     const last4 = hist.slice(-4).join('');
-                    if (last4 === 'SSBB' || last4 === 'BBSS') {
-                        userStates[id].skipCount = 8;
+                    if (last4 === 'SSBB' || last4 === 'BBSS' || last4 === 'SSSB' || last4 === 'BBBS') {
+                        userStates[id].skipCount = 4;
                         await send(msg.chat.id, 
                             "⚠️ Pattern Detected: " + last4 + "\n" +
-                            "🚫 Skipping next 8 periods...\n" +
+                            "🚫 Skipping next 4 periods...\n" +
                             "💡 Prediction will resume after skip."
                         );
                     }
