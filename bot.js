@@ -606,12 +606,7 @@ function updateAfterResult(userId, wasWin, actualSize) {
     }
 }
 
- // The key logic added:
-if (st.level === 4) {
-    state.skipCount = 8;
-    state.waitingForVirtualWin = true; // Wait for a win before sending L4
-    console.log(`[L3 LOSS] Skipping 8 periods + Waiting for Virtual Win before L4`);
-}
+
 }
 function getStatus(userId) {
     initState(userId);
