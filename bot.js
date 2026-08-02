@@ -564,12 +564,6 @@ function decidePrediction(list) {
     const fullHistory = buildBSFromList(list, 10);
     if (fullHistory.length < 2) return null;
 
-    // Pattern Detection: Skip risky patterns like SSBB or BBSS
-    const last4 = fullHistory.slice(-4).join('');
-    if (last4 === 'SSBB' || last4 === 'BBSS') {
-        return { skip: true, reason: "Pattern " + last4 };
-    }
-
     const mode = getModeFromLast2(fullHistory);
     if (!mode) return null;
 
@@ -587,16 +581,39 @@ function updateAfterResult(userId, wasWin, actualSize) {
     initState(userId);
     const state = userStates[userId];
     const st = autobetState[userId];
+    const cfg = autobetCfg[userId];
 
     // Push actual B/S to history
     const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
     state.resultHistory.push(bs);
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
-    // --- USER LOGIC: Skip 8 periods on every 3rd level loss (L3, L6, L9) ---
-    if (!wasWin && st.level % 3 === 0) {
+    if (wasWin) {
+        st.consecutiveLoss = 0;
+        st.level = 1;
+        st.inMart = false;
+    } else {
+        st.consecutiveLoss++;
+        st.level++;
+        st.inMart = true;
+        if (st.level > cfg.maxLvl) {
+            st.level = 1;
+            st.consecutiveLoss = 0;
+            st.inMart = false;
+        }
+    }
+
+    // 1. Skip 8 periods on 3 consecutive losses
+    if (st.consecutiveLoss === 3) {
         state.skipCount = 8;
-        console.log(`[L${st.level} LOSS] Skipping 8 periods.`);
+        console.log(`[USER ${userId}] 3 Loss Streak -> Skipping 8 periods.`);
+    }
+
+    // 2. Skip 8 periods on pattern BBSS or SSBB
+    const last4 = state.resultHistory.slice(-4).join('');
+    if (last4 === 'BBSS' || last4 === 'SSBB') {
+        state.skipCount = 8;
+        console.log(`[USER ${userId}] Pattern ${last4} -> Skipping 8 periods.`);
     }
 }
 function getStatus(userId) {
@@ -692,33 +709,20 @@ function stk(arr, key) {
 
 async function runPredict(userId, chatId) {
     if(!running[userId])return;
-
-    // --- SKIP LOGIC ---
+    initUser(userId);
     const state = userStates[userId];
-    if (state && state.skipCount > 0) {
-        const list = await fetchList();
-        if (list) {
-            const nextIssue = (BigInt(list[0].issueNumber) + 1n).toString();
-            if (!sentPeriods[userId].has("SKIP_" + nextIssue)) {
-                sentPeriods[userId].add("SKIP_" + nextIssue);
-                state.skipCount--;
-                await send(chatId, `⏭️ Skipping period ${nextIssue.slice(-6)}... (${state.skipCount} left)`);
-            }
-        }
-        return setTimeout(() => runPredict(userId, chatId), 15000);
-    }
-
-    // --- NEW: WAITING CHECK ---
     const st = autobetState[userId];
+    const cfg = autobetCfg[userId];
+
+    // --- WAITING CHECK (Profit Target) ---
     if (st.isWaiting) {
         if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
             st.nextStartTime = null;
-            profitTrack[userId].pnl = 0; // Reset P&L for new session
+            profitTrack[userId].pnl = 0; 
             await send(chatId, "🔄 Timed Restart! Starting new section now...");
         } else {
-            // Waiting period-la iruntha, 1 min kalichi thirumba check pannum
-            return setTimeout(()=>runPredict(userId,chatId), 60000);
+            return setTimeout(()=>runPredict(userId,chatId), 30000);
         }
     }
 
@@ -729,44 +733,37 @@ async function runPredict(userId, chatId) {
     }
 
     const next   = (BigInt(list[0].issueNumber)+1n).toString();
-    const signal = decidePrediction(list, autobetState[userId].level, userId);
+    if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
+    sentPeriods[userId].add(next);
+    if(sentPeriods[userId].size>50) sentPeriods[userId]=new Set([...sentPeriods[userId]].slice(-50));
+
+    const signal = decidePrediction(list, st.level, userId);
+    if(!signal){
+        return setTimeout(()=>runPredict(userId,chatId), 5000);
+    }
+
     const data10=list.slice(0,10).map(parseItem);
     const szS=stk(data10,"size"),clS=stk(data10,"color");
     const dragonInfo=szS.count>=6?"🐉 SIZE:"+szS.val+" x"+szS.count:clS.count>=6?"🐉 COLOR:"+clS.val+" x"+clS.count:"";
 
-    if(!signal){
-        const sk="SK_"+next;
-        if(!sentPeriods[userId].has(sk)){
-            sentPeriods[userId].add(sk);
-            await send(chatId,
-"╔══════════════════════════╗\n"+
-"║   ⏭️ SKIP                ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Period : "+next.slice(-6)+"\n"+
-(dragonInfo?"║ "+dragonInfo+"\n":"")+
-"║ No 90%+ pattern\n"+
-"║ Waiting next signal...\n"+
-"╚══════════════════════════╝"
-            );
-        }
-        return setTimeout(()=>runPredict(userId,chatId), 20000);
-    }
-
-    if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 5000);
-    sentPeriods[userId].add(next);
-    if(sentPeriods[userId].size>50) sentPeriods[userId]=new Set([...sentPeriods[userId]].slice(-50));
-
-    const cfg=autobetCfg[userId];
     const conf = signal.conf || 90;
     const confBar="🟦".repeat(Math.round(conf/10))+"⬜".repeat(10-Math.round(conf/10));
     const predDisplay=signal.type==="SIZE"?(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL"):(signal.val==="RED"?"🔴 RED":"🟢 GREEN");
 
-    let abLine="🤖 AutoBet: OFF";
-    if(cfg.enabled){
+    let abLine = "🤖 AutoBet: OFF";
+    let canBet = cfg.enabled;
+
+    // Skip/Watch Logic
+    if (state.skipCount > 0) {
+        abLine = `⏭️ SKIP BET (${state.skipCount} left)`;
+        state.skipCount--;
+        canBet = false;
+    } else if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) {
+        abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
+        canBet = false;
+    } else if (cfg.enabled) {
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
-        if(st.inMart) abLine="📈 MART L"+st.level+": ₹"+curBet;
-        else if(cfg.watch&&st.consecutiveLoss<cfg.watchLoss) abLine="👀 Watch: "+st.consecutiveLoss+"/"+cfg.watchLoss;
-        else abLine="💰 BET: ₹"+curBet+" L"+st.level;
+        abLine = (st.inMart ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
 
     await send(chatId,
@@ -775,8 +772,8 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Signal  : "+predDisplay+"\n"+
-    "║ Pattern : "+(signal.pat || signal.history || "N/A")+"\n"+
-    "║ Conf    : "+(signal.conf || "90")+"%\n"+
+"║ Pattern : "+(signal.pat || signal.history || "N/A")+"\n"+
+"║ Conf    : "+(signal.conf || "90")+"%\n"+
 "║ "+confBar+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
@@ -786,14 +783,16 @@ async function runPredict(userId, chatId) {
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
-    if (cfg.enabled ) { 
+    let betPlaced = false;
+    if (canBet) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
+            betPlaced = true;
             await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
         }
     }
 
-    checkResult(userId, chatId, next, signal.val, signal.type);
+    checkResult(userId, chatId, next, signal.val, signal.type, betPlaced);
 }
 
 
@@ -801,14 +800,13 @@ async function runPredict(userId, chatId) {
 //  RESULT CHECKER
 // ============================================================
 
-async function checkResult(userId, chatId, target, predicted, predType) {
+async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
     let tries=0;
     const cfg=autobetCfg[userId],st=autobetState[userId],pt=profitTrack[userId];
-    const wasReal=cfg.enabled ;
     
     const iv=setInterval(async()=>{
         if(!running[userId])return clearInterval(iv);
-        if(++tries>20){
+        if(++tries>25){
             clearInterval(iv);
             await logBoth(chatId, "⏱ Timeout — next...");
             setTimeout(()=>{if(running[userId])runPredict(userId,chatId);},3000);
@@ -825,6 +823,7 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         else actual=num===0?"RED":num===5?"GREEN":num%2===0?"RED":"GREEN";
         const win = predicted === actual;
 
+        // Level and streak update for ALL predictions
         updateAfterResult(userId, win, actual);
 
         const s = stats[userId];
@@ -832,14 +831,14 @@ async function checkResult(userId, chatId, target, predicted, predType) {
         if(win){s.win++;s.winStreak++;s.lossStreak=0;if(s.winStreak>s.maxWinStreak)s.maxWinStreak=s.winStreak;}
         else{s.loss++;s.lossStreak++;s.winStreak=0;if(s.lossStreak>s.maxLossStreak)s.maxLossStreak=s.lossStreak;}
 
-        if(cfg.enabled && wasReal){
+        if(betPlaced){
             if(win) await handleWin(userId,chatId,actual,num);
             else    await handleLoss(userId,chatId,actual,num);
 
             // --- NEW: PROFIT STOP & RESTART LOGIC ---
             if (pt.pnl >= cfg.targetProfit) {
-                st.isWaiting = true;// Intha line-ah mathunga:
-st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calculation
+                st.isWaiting = true;
+                st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); 
 
                 const restartTimeStr = new Date(st.nextStartTime).toLocaleTimeString();
                 await send(chatId, 
@@ -851,7 +850,7 @@ st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); // Minutes calcu
                 );
             }
 
-        } else if (cfg.enabled && !wasReal) {
+        } else if (cfg.enabled && !betPlaced) {
             if(win) await send(chatId,"👀 Watch ✅ Correct! (No bet placed)");
             else    await send(chatId,"👀 Watch ❌ Incorrect! (No bet placed)");
         } else {
