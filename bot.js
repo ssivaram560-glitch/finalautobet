@@ -1390,7 +1390,7 @@ function addHandlers(){
         // ════════════════════════════════════════════════════════════════════
         //  START PREDICTION — FIXED: Full reset of ALL state including skip flags
         // ════════════════════════════════════════════════════════════════════
-   if(text==="▶️ Start Prediction"){
+  if(text==="▶️ Start Prediction"){
             if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
             if(running[id])return send(msg.chat.id,"⚠️ Already running!");
             if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
@@ -1419,11 +1419,11 @@ function addHandlers(){
                 // Build B/S history
                 userStates[id].resultHistory = buildBSFromList(prevList, 15);
                 
-                // Check startup pattern for immediate skip safety
-                const patCheck = checkPattern(userStates[id].resultHistory, 4);
+                // Check startup pattern for immediate skip safety (Updated to 1 skip instead of 6)
+                const patCheck = checkPattern(userStates[id].resultHistory);
                 if (patCheck.isDangerous) {
                     userStates[id].inSkipCycle = true;
-                    userStates[id].skipCount = 6;
+                    userStates[id].skipCount = 1;
                 }
 
                 await send(msg.chat.id, "📋 Loaded history: " + (userStates[id].resultHistory || []).join('') + (patCheck.isDangerous ? "\n⚠️ Dangerous pattern ("+patCheck.pattern+") found! Skip active." : ""));
@@ -1431,7 +1431,7 @@ function addHandlers(){
 
             const cfg=autobetCfg[id];
             await send(msg.chat.id,
-"🚀 ENGINE ON!\n\nAutoBet: "+(cfg.enabled?"✅ ON":"❌ OFF")+"\nWatch  : "+(cfg.watch?"ON ("+cfg.watchLoss+"L)":"OFF")+"\nBase   : ₹"+cfg.baseBet+" | MaxLvl: "+cfg.maxLvl+"\n\n✅ Level: L1\n✅ Skip: "+(userStates[id].inSkipCycle ? "ACTIVE (6)" : "OFF")+"\n✅ Pattern Checked"
+"🚀 ENGINE ON!\n\nAutoBet: "+(cfg.enabled?"✅ ON":"❌ OFF")+"\nWatch  : "+(cfg.watch?"ON ("+cfg.watchLoss+"L)":"OFF")+"\nBase   : ₹"+cfg.baseBet+" | MaxLvl: "+cfg.maxLvl+"\n\n✅ Level: L1\n✅ Skip: "+(userStates[id].inSkipCycle ? "ACTIVE (1)" : "OFF")+"\n✅ Pattern Checked"
             );
             runPredict(id,msg.chat.id);
     }
