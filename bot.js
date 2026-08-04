@@ -815,8 +815,8 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         st.inMart = true;
     }
 
-    if (st.inMart) {
-        // Check if we have reached the maximum allowed level
+   if (st.inMart) {
+        // First, check if max level reached BEFORE increasing level
         if (st.level >= cfg.maxLvl) {
             console.log(`[USER ${userId}] Reached Max Level L${cfg.maxLvl}. Resetting to Level 1.`);
             st.level = 1;
@@ -824,18 +824,19 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
             st.consecutiveLoss = 0;
             state.inSkipCycle = false;
             state.patternTriggered = false;
-            return;
+            return; // Exit completely, do not increment level or trigger skip!
         }
 
         st.level++;
 
-        // FIXED: Now triggers skip and pattern checks on ANY multiple of 3 losses (L3, L6, L9, etc.)
+        // Triggers skip and pattern checks on multiples of 3 losses (L3, L6, etc.)
         if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
             state.skipCount = 6;
             state.patternTriggered = false;
             console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive losses → SKIP 6 predictions & Pattern check queued.`);
         }
+    
     } else {
         st.currentPlayedLevel = 1;
         if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
