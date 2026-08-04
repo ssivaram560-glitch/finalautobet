@@ -679,16 +679,16 @@ async function runPredict(userId, chatId) {
         const patResult = checkPattern(state.resultHistory);
 
         if (patResult.isDangerous) {
-            console.log(`[USER ${userId}] Pattern ${patResult.pattern} DANGEROUS → SKIP 6 again. Level L${st.level} maintained.`);
+            console.log(`[USER ${userId}] Pattern ${patResult.pattern} DANGEROUS → SKIP 8 again. Level L${st.level} maintained.`);
             state.inSkipCycle = true;
-            state.skipCount = 6;
+            state.skipCount = 8;
 
             await send(chatId,
                 "╔══════════════════════════╗\n" +
                 "║   ⚠️ DANGEROUS PATTERN   ║\n" +
                 "╠══════════════════════════╣\n" +
                 "║ Pattern: " + patResult.pattern + "\n" +
-                "║ Action : SKIP 6 more\n" +
+                "║ Action : SKIP 8 more\n" +
                 "║ Level  : L" + st.level + " (maintained)\n" +
                 "║ Next   : Pattern check again\n" +
                 "╚══════════════════════════╝"
@@ -832,7 +832,7 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         // Triggers skip and pattern checks on multiples of 3 losses (L3, L6, etc.)
         if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
-            state.skipCount = 6;
+            state.skipCount = 8;
             state.patternTriggered = false;
             console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive losses → SKIP 6 predictions & Pattern check queued.`);
         }
