@@ -479,9 +479,9 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 return false;
 }
 // ============================================================
-//  LOGIC — PREDICTION MODE + 3 LOSS → 4 SKIP → PATTERN CHECK → LOOP
-//  Level MAINTAINS until WIN. Skip-Pattern cycle runs until WIN.
+//  LOGIC — PREDICTION MODE + MULTI-LEVEL LOSS → SKIP → PATTERN CHECK
 // ============================================================
+
 // ════════════════════════════════════════════════════════════════════
 //  INIT STATE — Safe
 // ════════════════════════════════════════════════════════════════════
@@ -638,12 +638,8 @@ async function runPredict(userId, chatId) {
     const szS = stk(data10, "size"), clS = stk(data10, "color");
     const dragonInfo = szS.count >= 6 ? "🐉 SIZE:" + szS.val + " x" + szS.count : clS.count >= 6 ? "🐉 COLOR:" + clS.val + " x" + clS.count : "";
 
-    // ════════════════════════════════════════════════════════════════════
-    //  INIT STATE & SYNC HISTORY
-    // ════════════════════════════════════════════════════════════════════
     initState(userId);
     const state = userStates[userId];
-
     state.resultHistory = buildBSFromList(list, 10);
 
     // ════════════════════════════════════════════════════════════════════
@@ -652,12 +648,11 @@ async function runPredict(userId, chatId) {
     if (state.inSkipCycle) {
         const sk = "SK_" + next;
         if (!sentPeriods[userId].has(sk)) {
-            state.skipCount--; // ✅ Fixed inside the block properly
-
+            state.skipCount--; 
             sentPeriods[userId].add(sk);
             await send(chatId,
                 "╔══════════════════════════╗\n" +
-                "║    🚫 SKIP ACTIVE        ║\n" +
+                "║   🚫 SKIP ACTIVE         ║\n" +
                 "╠══════════════════════════╣\n" +
                 "║ Period : " + next.slice(-6) + "\n" +
                 "║ Skip   : " + state.skipCount + " more\n" +
@@ -724,7 +719,7 @@ async function runPredict(userId, chatId) {
             sentPeriods[userId].add(sk);
             await send(chatId,
                 "╔══════════════════════════╗\n" +
-                "║    ⏭️ SKIP               ║\n" +
+                "║   ⏭️ SKIP                ║\n" +
                 "╠══════════════════════════╣\n" +
                 "║ Period : " + next.slice(-6) + "\n" +
                 (dragonInfo ? "║ " + dragonInfo + "\n" : "") +
@@ -740,27 +735,24 @@ async function runPredict(userId, chatId) {
     sentPeriods[userId].add(next);
     if (sentPeriods[userId].size > 50) sentPeriods[userId] = new Set([...sentPeriods[userId]].slice(-50));
 
+    // Store the exact level and amount to be played for THIS period securely before sending/betting
+    st.currentPlayedLevel = st.level;
+    st.lastBetLevel = st.level;
+    st.lastBetAmount = cfg.customBets[st.level - 1] || (cfg.baseBet * MULT[st.level - 1]);
+
     const confBar = "🟦".repeat(Math.round(signal.conf / 10)) + "⬜".repeat(10 - Math.round(signal.conf / 10));
     const predDisplay = signal.type === "SIZE" ? (signal.val === "BIG" ? "🔵 BIG" : "🟠 SMALL") : (signal.val === "RED" ? "🔴 RED" : "🟢 GREEN");
 
-    // Capture the exact level and amount being played for THIS specific period/signal before placement
-    const activeLevel = st.level;
-    const activeAmount = cfg.customBets[activeLevel - 1] || (cfg.baseBet * MULT[activeLevel - 1]);
-
-    st.currentPlayedLevel = activeLevel;
-    st.lastBetLevel = activeLevel;
-    st.lastBetAmount = activeAmount;
-
     let abLine = "🤖 AutoBet: OFF";
     if (cfg.enabled) {
-        if (st.inMart) abLine = "📈 MART L" + activeLevel + ": ₹" + activeAmount;
+        if (st.inMart) abLine = "📈 MART L" + st.level + ": ₹" + st.lastBetAmount;
         else if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) abLine = "👀 Watch: " + st.consecutiveLoss + "/" + cfg.watchLoss;
-        else abLine = "💰 BET: ₹" + activeAmount + " L" + activeLevel;
+        else abLine = "💰 BET: ₹" + st.lastBetAmount + " L" + st.level;
     }
 
     await send(chatId,
         "╔══════════════════════════╗\n" +
-        "║    👑 EARN WITH ME AI    ║\n" +
+        "║   👑 EARN WITH ME AI     ║\n" +
         "╠══════════════════════════╣\n" +
         "║ Period  : " + next.slice(-6) + "\n" +
         "║ Signal  : " + predDisplay + "\n" +
@@ -776,11 +768,9 @@ async function runPredict(userId, chatId) {
     );
 
     if (cfg.enabled) {
-        const result = await placeBet(userId, chatId, next, signal.val, signal.type, activeLevel);
+        const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
-            st.lastBetLevel = activeLevel;
-            st.lastBetAmount = result.amt || activeAmount;
-            await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + st.lastBetAmount + " L" + activeLevel + "\n⏳ Checking result...");
+            await send(chatId, "✅ Bet Success! " + result.bc + " ₹" + st.lastBetAmount + " L" + st.level + "\n⏳ Checking result...");
         }
     }
 
@@ -788,7 +778,7 @@ async function runPredict(userId, chatId) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  UPDATE AFTER RESULT — CORE LOGIC (FIXED FOR EVERY MULTIPLE LOSS)
+//  UPDATE AFTER RESULT — CORE LOGIC (FIXED MULTI-LEVEL & P&L TRIGGERS)
 // ════════════════════════════════════════════════════════════════════
 function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     initState(userId);
@@ -800,6 +790,9 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     state.resultHistory.push(bs);
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
+    // ════════════════════════════════════════════════════════════════
+    //  WIN → FULL RESET
+    // ════════════════════════════════════════════════════════════════
     if (wasWin) {
         st.consecutiveLoss = 0;
         st.level = 1;
@@ -813,6 +806,9 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         return;
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  LOSS → MULTI-LEVEL & PATTERN CHECK TRIGGERS
+    // ════════════════════════════════════════════════════════════════
     st.consecutiveLoss++;
 
     if (betPlaced) {
@@ -820,6 +816,7 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     }
 
     if (st.inMart) {
+        // Check if we have reached the maximum allowed level
         if (st.level >= cfg.maxLvl) {
             console.log(`[USER ${userId}] Reached Max Level L${cfg.maxLvl}. Resetting to Level 1.`);
             st.level = 1;
@@ -832,12 +829,12 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
 
         st.level++;
 
-        // Trigger pattern check on EVERY multiple of 3 losses (L3, L6, L9, etc.)
-        if (st.consecutiveLoss > 0 && st.consecutiveLoss % 3 === 0) {
+        // FIXED: Now triggers skip and pattern checks on ANY multiple of 3 losses (L3, L6, L9, etc.)
+        if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
             state.skipCount = 6;
             state.patternTriggered = false;
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive loss → SKIP 6 predictions & check pattern.`);
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive losses → SKIP 6 predictions & Pattern check queued.`);
         }
     } else {
         st.currentPlayedLevel = 1;
@@ -862,14 +859,15 @@ function getStatus(userId) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  HANDLE WIN
+//  HANDLE WIN (FIXED P&L ADDITION)
 // ════════════════════════════════════════════════════════════════════
 async function handleWin(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
     
-    const playedLevel = st.currentPlayedLevel || st.lastBetLevel || st.level || 1;
+    // Use the exact level played for this specific period calculation
+    const playedLevel = st.currentPlayedLevel || st.lastBetLevel || 1;
     const amt = st.lastBetAmount || cfg.customBets[playedLevel - 1] || (cfg.baseBet * MULT[playedLevel - 1]);
-    const profit = amt * 0.98;
+    const profit = amt * 0.98; 
     
     pt.totalBets++; 
     pt.wins++; 
@@ -906,11 +904,12 @@ async function handleWin(userId, chatId, actual, num) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  HANDLE LOSS
+//  HANDLE LOSS (FIXED P&L CALCULATION)
 // ════════════════════════════════════════════════════════════════════
 async function handleLoss(userId, chatId, actual, num) {
     const st = autobetState[userId], pt = profitTrack[userId], cfg = autobetCfg[userId];
 
+    // Accurately fetch the exact amount corresponding to the level that was actually played
     const playedLevel = st.currentPlayedLevel || st.lastBetLevel || 1;
     const lossAmt = st.lastBetAmount || cfg.customBets[playedLevel - 1] || (cfg.baseBet * MULT[playedLevel - 1]);
     
