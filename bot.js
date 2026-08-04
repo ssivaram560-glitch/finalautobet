@@ -815,8 +815,8 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         st.inMart = true;
     }
 
-   if (st.inMart) {
-        // First, check if max level reached BEFORE increasing level
+    if (st.inMart) {
+        // 1. Check if max level reached BEFORE increasing level
         if (st.level >= cfg.maxLvl) {
             console.log(`[USER ${userId}] Reached Max Level L${cfg.maxLvl}. Resetting to Level 1.`);
             st.level = 1;
@@ -824,19 +824,25 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
             st.consecutiveLoss = 0;
             state.inSkipCycle = false;
             state.patternTriggered = false;
-            return; // Exit completely, do not increment level or trigger skip!
+            return; // Exit completely
         }
 
+        // 2. Increment level first
         st.level++;
 
-        // Triggers skip and pattern checks on multiples of 3 losses (L3, L6, etc.)
+        // 3. STRICT CHECK: ONLY on 3, 6, 9 (multiples of 3 losses), trigger the skip & pattern check!
+        // (Maththa level loss-la antha check and skip varathu, straight-ah next level prediction pogum)
         if (st.consecutiveLoss % 3 === 0) {
             state.inSkipCycle = true;
-            state.skipCount = 8;
+            state.skipCount = 8; // Nee 8 period skip ketathnala 8nu set paniruken (or 6)
             state.patternTriggered = false;
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive losses → SKIP 6 predictions & Pattern check queued.`);
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} consecutive losses (Multiple of 3) → SKIP 8 & Pattern check queued.`);
+        } else {
+            // Ensure skip is OFF for all other levels (like 1, 2, 4, 5, 7, 8)
+            state.inSkipCycle = false;
+            state.patternTriggered = false;
         }
-    
+
     } else {
         st.currentPlayedLevel = 1;
         if (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss) {
@@ -845,7 +851,6 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         }
     }
 }
-
 // ════════════════════════════════════════════════════════════════════
 //  GET STATUS
 // ════════════════════════════════════════════════════════════════════
