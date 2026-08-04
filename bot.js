@@ -888,12 +888,12 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         }
 
         // Loss-streak skip rules
-        if (st.consecutiveLoss === 3) {
+       if (st.consecutiveLoss === 3 || st.consecutiveLoss === 4) {
             state.skipCount = Math.max(state.skipCount, 5);
-            console.log(`[USER ${userId}] 3 losses -> skip next 5 predictions.`);
-        } else if (st.consecutiveLoss === 5) {
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> skip next 5 predictions.`);
+        } else if (st.consecutiveLoss === 5 || st.consecutiveLoss === 9) {
             state.skipCount = Math.max(state.skipCount, 3);
-            console.log(`[USER ${userId}] 5 losses -> skip next 3 predictions.`);
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> skip next 3 predictions.`);
         } else if (st.consecutiveLoss === 7) {
             state.skipCount = Math.max(state.skipCount, 5);
             console.log(`[USER ${userId}] 7 losses -> skip next 5 predictions.`);
@@ -911,6 +911,8 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
         }
     }
 }
+
+
 
 
 function getStatus(userId) {
