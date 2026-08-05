@@ -283,7 +283,7 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
-    let browser;
+      let browser;
     try {
         browser = await puppeteer.launch({
             headless: true, 
@@ -301,6 +301,7 @@ async function autoLogin(userId, chatId, silent = false) {
             }
             req.continue();
         });
+
 
         await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
         await page.waitForSelector('input', { timeout: 30000 });
