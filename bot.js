@@ -657,46 +657,49 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     state.resultHistory.push(bs);
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
-    // If no actual bet was placed, do not advance the ladder or loss streak.
-    // Keep the current level so the next retry uses the same amount again.
-    if (!betPlaced) {
-        return;
-    }
-
     if (wasWin) {
-        // Reset everything on win
-        state.skipCount = 0;
+        // Reset loss streak always
         st.consecutiveLoss = 0;
-        st.level = 1;
-        st.inMart = false;
-        st.waitAfter7 = false;
-        st.waitAfter7Remaining = 0;
+        
+        // If a real bet was placed, reset Martingale and skips
+        if (betPlaced) {
+            state.skipCount = 0;
+            st.level = 1;
+            st.inMart = false;
+            st.waitAfter7 = false;
+            st.waitAfter7Remaining = 0;
+        }
     } else {
+        // Increment loss streak always (even during watch mode)
         st.consecutiveLoss++;
-        st.inMart = true;
-        st.level++;
 
-        // --- LOSS-BASED SKIP RULES ---
-        if (st.consecutiveLoss === 3 || st.consecutiveLoss === 6) {
-            state.skipCount = Math.max(state.skipCount, 5);
-            st.inMart = false;
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> Skipping 5 predictions.`);
-        }
-        if (st.consecutiveLoss === 7) {
-            st.inMart = false;
-            st.waitAfter7 = true;
-            st.waitAfter7Remaining = 3;
-            st.level = 8;
-            console.log(`[USER ${userId}] 7 losses -> Wait for 3 more losses, then bet L8.`);
-        }
+        // Only advance Martingale if a real bet was placed
+        if (betPlaced) {
+            st.inMart = true;
+            st.level++;
 
-        // --- L4 ENTRY CHECK (Safety) ---
-        if (st.level === 4) {
-            const last4 = state.resultHistory.slice(-4).join('');
-            const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
-            if (dangerousPatterns.includes(last4)) {
-                state.skipCount = 4;
-                console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
+            // --- LOSS-BASED SKIP RULES (Only for real bets) ---
+            if (st.consecutiveLoss === 3 || st.consecutiveLoss === 6) {
+                state.skipCount = Math.max(state.skipCount, 5);
+                st.inMart = false;
+                console.log(`[USER ${userId}] ${st.consecutiveLoss} real losses -> Skipping 5 predictions.`);
+            }
+            if (st.consecutiveLoss === 7) {
+                st.inMart = false;
+                st.waitAfter7 = true;
+                st.waitAfter7Remaining = 3;
+                st.level = 8;
+                console.log(`[USER ${userId}] 7 real losses -> Wait for 3 more losses, then bet L8.`);
+            }
+
+            // --- L4 ENTRY CHECK (Safety) ---
+            if (st.level === 4) {
+                const last4 = state.resultHistory.slice(-4).join('');
+                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
+                if (dangerousPatterns.includes(last4)) {
+                    state.skipCount = 4;
+                    console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
+                }
             }
         }
     }
