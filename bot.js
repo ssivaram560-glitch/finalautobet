@@ -28,10 +28,20 @@ const MULT = [1, 3, 9, 27, 81, 243, 729, 2187, 6561, 19683]; // Standard 3x Mart
 // ============================================================
 const http = require('http');
 const PORT = process.env.PORT || 5000;
-http.createServer((req, res) => {
+const keepAliveServer = http.createServer((req, res) => {
     res.writeHead(200);
     res.end('SIVA BOT OK');
-}).listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
+});
+
+keepAliveServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.warn(`[KEEP-ALIVE] Port ${PORT} already in use. Keep-alive server skipped.`);
+    } else {
+        console.error('[KEEP-ALIVE] Server error:', err);
+    }
+});
+
+keepAliveServer.listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
 
 const RENDER_URL = process.env.RENDER_URL || "";
 if (RENDER_URL) {
@@ -107,40 +117,22 @@ async function fetchList() {
     }
 }
 async function getLiveBalance(userId) {
-    const token = getToken(userId);
-    if (!token) return { success:false, message:"No token" };
-    const url = "https://api.bdg88zf.com/api/webapi/GetBalance";
-    const headers = {
-        "Authorization": "Bearer " + token,
-        "Ar-Origin": "https://bdgwin901.com",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
-    };
-
-    async function parseResponse(r) {
-        if (r.data && r.data.code === 0 && r.data.data && typeof r.data.data.balance !== 'undefined') {
-            return { success:true, balance:r.data.data.balance };
-        }
-        return {
-            success:false,
-            message: r.data && r.data.msg ? r.data.msg : "Token expired or invalid"
-        };
-    }
-
+    let token = getToken(userId);
+    if (!token) return null;
     try {
-        const r = await axios.get(url, { headers, timeout: 5000 });
-        return await parseResponse(r);
-    } catch (e) {
-        if (e.response && e.response.status === 405) {
-            try {
-                const r2 = await axios.post(url, {}, { headers, timeout: 5000 });
-                return await parseResponse(r2);
-            } catch (e2) {
-                const errMsg = e2.response?.data?.msg || e2.message || "API Error";
-                return { success:false, message: errMsg };
+        const r = await axios.get("https://api.bdg88zf.com/api/webapi/GetBalance", {
+            headers: {
+                "Authorization": "Bearer " + token,
+                "Ar-Origin": "https://bdgwin901.com",
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
             }
+        });
+        if (r.data && r.data.code === 0) {
+            return r.data.data.balance;
         }
-        const errMsg = e.response?.data?.msg || e.message || "API Error";
-        return { success:false, message: errMsg };
+        return null;
+    } catch (e) {
+        return null;
     }
 }
 
@@ -163,26 +155,16 @@ function initUser(id) {
         level:1, 
         consecutiveLoss:0, 
         inMart:false,
-        isWaiting: false,      // NEW: Bot waiting-la irukka-nu check panna
-        nextStartTime: null    // NEW: Thirumba eppo start aakanum-nu store panna
+        isWaiting: false,
+        nextStartTime: null,
+        waitAfter7: false,
+        waitAfter7Remaining: 0
     };
     if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
 
-function hasAccess(id) {
-    if (Number(id) === Number(OWNER_ID)) return true;
-    if (running[id] === true) return true;
-    const expiry = usersAccess[id];
-    return !!(expiry && Date.now() < expiry);
-}
-function daysLeft(id) {
-    if (Number(id) === Number(OWNER_ID)) return "∞";
-    if (running[id] === true) return "RUN";
-    const expiry = usersAccess[id];
-    if (!expiry) return "0";
-    const left = (expiry - Date.now()) / 86400000;
-    return left > 0 ? left.toFixed(1) : "0";
-}
+function hasAccess(id)  { return Number(id) === OWNER_ID || !!(usersAccess[id] && Date.now() < usersAccess[id]); }
+function daysLeft(id)   { return Number(id) === OWNER_ID ? "∞" : usersAccess[id] ? ((usersAccess[id]-Date.now())/86400000).toFixed(1) : "0"; }
 function isAdmin(id)    { return adminPasswords[id] !== undefined; }
 function isAdminIn(id)  { return adminLoggedIn[id] === true; }
 function sleep(ms)      { return new Promise(r => setTimeout(r, ms)); }
@@ -197,31 +179,15 @@ function activateKey(userId, code) {
     const k = code.toUpperCase().trim();
     if (!keyStore[k])     return { ok:false, msg:"❌ Invalid key!" };
     if (keyStore[k].used) return { ok:false, msg:"❌ Key already used!" };
-
-    const days = Number(keyStore[k].days) || 1;
-    const currentExpiry = usersAccess[userId];
-    const base = (currentExpiry && currentExpiry > Date.now()) ? currentExpiry : Date.now();
-    const newExpiry = base + days * 86400000;
-
-    keyStore[k].used=true;
-    keyStore[k].usedBy=userId;
-    usersAccess[userId] = newExpiry;
-    return { ok:true, days, expiry:new Date(newExpiry).toLocaleString() };
+    const days = keyStore[k].days;
+    keyStore[k].used=true; keyStore[k].usedBy=userId;
+    const base = (usersAccess[userId]&&usersAccess[userId]>Date.now()) ? usersAccess[userId] : Date.now();
+    usersAccess[userId] = base + days*86400000;
+    return { ok:true, days, expiry:new Date(usersAccess[userId]).toLocaleString() };
 }
 function activeUsersList() {
-    const now=Date.now();
-    const ids = new Set(Object.keys(usersAccess));
-    Object.keys(running).forEach(id => { if (running[id]) ids.add(id); });
-
-    const list = [...ids].filter(id => Number(id) === Number(OWNER_ID) || running[id] || Number(usersAccess[id]) > now);
-    if (!list.length) return "No active users.";
-
-    return list.map(id => {
-        if (Number(id) === Number(OWNER_ID)) return "🟢 " + id + " | ♾️ Unlimited";
-        if (running[id]) return "🟢 " + id + " | ⚡ Running";
-        const expiry = Number(usersAccess[id]) || 0;
-        return "🟢 " + id + " | " + ((expiry - now) / 86400000).toFixed(1) + "d";
-    }).join("\n");
+    const now=Date.now(), list=Object.entries(usersAccess).filter(([,e])=>e>now);
+    return list.length ? list.map(([id,e])=>"🟢 "+id+" | "+((e-now)/86400000).toFixed(1)+"d").join("\n") : "No active users.";
 }
 function adminList() {
     const ids=Object.keys(adminPasswords);
@@ -578,273 +544,69 @@ function buildBSFromList(list, count) {
     return seq.reverse(); // Returns oldest to newest
 }
 
-function buildNumberList(list, count) {
-    const recent = list.slice(0, Math.min(count, list.length));
-    const nums = [];
-    for (const item of recent) {
-        const n = parseInt(item.number || item.winNumber || 0);
-        if (!isNaN(n)) nums.push(n);
-    }
-    return nums;
+/**
+ * Determines the current trend mode (SAME or OPPOSITE)
+ */
+function getModeFromLast2(resultHistory) {
+    if (resultHistory.length < 2) return null;
+    const len = resultHistory.length;
+    const secondLast = resultHistory[len - 2];
+    const last = resultHistory[len - 1];
+    return secondLast === last ? "SAME" : "OPPOSITE";
 }
 
-function classifyNumber(number) {
-    if (number >= 0 && number <= 4) return 'Small';
-    if (number >= 5 && number <= 9) return 'Big';
-    return 'Invalid';
+/**
+ * Predicts the next result based on the detected mode
+ */
+function getPredictionFromMode(resultHistory, mode) {
+    if (resultHistory.length < 1) return null;
+    const last = resultHistory[resultHistory.length - 1];
+    if (mode === "SAME") return last === "B" ? "BIG" : "SMALL";
+    if (mode === "OPPOSITE") return last === "B" ? "SMALL" : "BIG";
+    return null;
 }
 
-class ResultAnalyzer {
-    constructor() {
-        this.results = [];
-        this.analysis = null;
-        this.prediction = null;
-    }
+// ============================================================
+//  PREDICTION LOGIC
+// ============================================================
 
-    setResults(results) {
-        if (!Array.isArray(results) || results.length < 10) {
-            console.error('❌ Need at least 10 results');
-            return false;
-        }
+function decidePrediction(list, level = 1) {
+    if (!list || list.length === 0) return null;
 
-        this.results = results.slice(0, 10);
-        this.analyze();
-        this.predict();
-        return true;
-    }
+    const fullHistory = buildBSFromList(list, 10);
+    if (fullHistory.length === 0) return null;
 
-    getCategoryDetails(number) {
-        const category = this.classifyNumber(number);
-        const icon = category === 'Small' ? '⬇️' : '⬆️';
-        const range = category === 'Small' ? '0-4' : '5-9';
-        const color = category === 'Small' ? '#4ECDC4' : '#FF6B6B';
-        return { category, icon, range, color };
-    }
+    if (level <= 3) {
+        const last5 = fullHistory.slice(-5);
+        const counts = last5.reduce((acc, item) => {
+            acc[item] = (acc[item] || 0) + 1;
+            return acc;
+        }, {});
+        const bigCount = counts.B || 0;
+        const smallCount = counts.S || 0;
+        const prediction = bigCount >= smallCount ? 'BIG' : 'SMALL';
 
-    classifyNumber(number) {
-        return classifyNumber(number);
-    }
-
-    appearsInArray(value, array) {
-        return array.includes(value);
-    }
-
-    detectDoubleViolet(sequence) {
-        const positions = [];
-        for (let i = 0; i < sequence.length - 1; i++) {
-            if ((sequence[i] === 0 && sequence[i + 1] === 0) ||
-                (sequence[i] === 5 && sequence[i + 1] === 5)) {
-                positions.push({
-                    number: sequence[i],
-                    position: i,
-                    next: sequence[i + 1]
-                });
-            }
-        }
         return {
-            found: positions.length > 0,
-            positions,
-            count: positions.length
+            type: 'SIZE',
+            val: prediction,
+            mode: `LAST5:${last5.join('')}`,
+            history: last5.join('')
         };
     }
 
-    analyze() {
-        if (!this.results || this.results.length === 0) {
-            console.error('❌ No results to analyze');
-            return;
-        }
+    if (fullHistory.length < 2) return null;
 
-        const current = this.results[0];
-        const previous9 = this.results.slice(1);
-        const appearedBefore = this.appearsInArray(current, previous9);
-        const doubleViolet = this.detectDoubleViolet(this.results);
+    const mode = getModeFromLast2(fullHistory);
+    if (!mode) return null;
 
-        const frequency = {};
-        const categories = {};
-        let bigCount = 0;
-        let smallCount = 0;
-
-        this.results.forEach((num) => {
-            frequency[num] = (frequency[num] || 0) + 1;
-            const category = this.classifyNumber(num);
-            categories[num] = category;
-            if (category === 'Big') bigCount++;
-            else if (category === 'Small') smallCount++;
-        });
-
-        const patterns = this.detectPatterns(this.results);
-
-        this.analysis = {
-            current: {
-                value: current,
-                category: this.classifyNumber(current),
-                details: this.getCategoryDetails(current),
-                appearedBefore: appearedBefore,
-                timesAppeared: frequency[current] || 0
-            },
-            previous9,
-            doubleViolet,
-            frequency,
-            categories,
-            statistics: {
-                total: this.results.length,
-                big: bigCount,
-                small: smallCount,
-                bigPercentage: ((bigCount / this.results.length) * 100).toFixed(1),
-                smallPercentage: ((smallCount / this.results.length) * 100).toFixed(1)
-            },
-            patterns,
-            allResults: this.results
-        };
-    }
-
-    detectPatterns(sequence) {
-        const patterns = {
-            consecutive: [],
-            repeating: [],
-            alternating: false,
-            increasing: false,
-            decreasing: false
-        };
-
-        for (let i = 0; i < sequence.length - 1; i++) {
-            if (Math.abs(sequence[i] - sequence[i + 1]) === 1) {
-                patterns.consecutive.push({
-                    pair: [sequence[i], sequence[i + 1]],
-                    position: i
-                });
-            }
-        }
-
-        for (let i = 0; i < sequence.length - 2; i++) {
-            if (sequence[i] === sequence[i + 1] && sequence[i] === sequence[i + 2]) {
-                patterns.repeating.push({
-                    number: sequence[i],
-                    position: i,
-                    count: 3
-                });
-            }
-        }
-
-        let alternatingCount = 0;
-        for (let i = 0; i < sequence.length - 1; i++) {
-            const cat1 = this.classifyNumber(sequence[i]);
-            const cat2 = this.classifyNumber(sequence[i + 1]);
-            if (cat1 !== cat2) alternatingCount++;
-        }
-        patterns.alternating = alternatingCount >= sequence.length - 2;
-
-        let increasing = true;
-        let decreasing = true;
-        for (let i = 0; i < sequence.length - 1; i++) {
-            if (sequence[i] >= sequence[i + 1]) decreasing = false;
-            if (sequence[i] <= sequence[i + 1]) increasing = false;
-        }
-        patterns.increasing = increasing;
-        patterns.decreasing = decreasing;
-
-        return patterns;
-    }
-
-    predict() {
-        if (!this.analysis) {
-            console.error('❌ Please run analysis first');
-            return;
-        }
-
-        const current = this.analysis.current;
-        const appearedBefore = current.appearedBefore;
-        const doubleViolet = this.analysis.doubleViolet;
-        const stats = this.analysis.statistics;
-        const patterns = this.analysis.patterns;
-
-        const oppositeCategory = current.category === 'Big' ? 'Small' : 'Big';
-
-        let prediction = {
-            strategy: '',
-            confidence: 0,
-            recommendedNumbers: [],
-            reasoning: []
-        };
-
-        if (appearedBefore) {
-            prediction.strategy = 'Current appeared before - predicting opposite';
-            prediction.reasoning.push(`Number ${current.value} appeared ${current.timesAppeared} times in last 10 results`);
-            prediction.reasoning.push('Historical pattern suggests opposition');
-            prediction.confidence = 65;
-        } else {
-            prediction.strategy = 'New number - predicting opposite for diversification';
-            prediction.reasoning.push(`Number ${current.value} is new in recent history`);
-            prediction.confidence = 60;
-        }
-
-        if (doubleViolet.found) {
-            prediction.reasoning.push(`⚠️ DOUBLE VIOLET DETECTED! ${doubleViolet.count} occurrence(s)`);
-            doubleViolet.positions.forEach(pos => {
-                prediction.reasoning.push(`  Position ${pos.position + 1}: ${pos.number}${pos.number}`);
-            });
-            prediction.confidence += 10;
-        }
-
-        if (patterns.alternating) {
-            prediction.reasoning.push('🔄 Alternating pattern detected');
-            prediction.confidence += 5;
-        }
-
-        if (patterns.consecutive.length > 0) {
-            prediction.reasoning.push(`📈 ${patterns.consecutive.length} consecutive pairs found`);
-            prediction.confidence += 5;
-        }
-
-        const dominantCategory = stats.big > stats.small ? 'Big' : 'Small';
-        if (dominantCategory === oppositeCategory) {
-            prediction.reasoning.push(`📊 ${oppositeCategory} is currently dominant in history`);
-            prediction.confidence += 5;
-        }
-
-        const numberScores = {};
-        for (let i = 0; i <= 9; i++) {
-            const category = this.classifyNumber(i);
-            const frequency = this.analysis.frequency[i] || 0;
-            const isOpposite = category === oppositeCategory;
-            let score = isOpposite ? 10 : 0;
-            score += (10 - frequency * 2);
-            score += Math.random() * 2;
-            numberScores[i] = score;
-        }
-
-        const sortedNumbers = Object.entries(numberScores)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(entry => parseInt(entry[0]));
-
-        prediction.recommendedNumbers = sortedNumbers;
-        prediction.confidence = Math.min(100, Math.round(prediction.confidence));
-
-        this.prediction = prediction;
-    }
-}
-
-function decidePrediction(list) {
-    if (!list || list.length < 10) return null;
-
-    const numbers = buildNumberList(list, 10);
-    if (numbers.length < 10) return null;
-
-    const analyzer = new ResultAnalyzer();
-    if (!analyzer.setResults(numbers)) return null;
-
-    const currentCategory = analyzer.analysis.current.category;
-    const predictionValue = currentCategory === 'Big' ? 'SMALL' : 'BIG';
-    const history = numbers.slice(0, 4).map(n => n >= 5 ? 'B' : 'S').join('');
+    const prediction = getPredictionFromMode(fullHistory, mode);
+    if (!prediction) return null;
 
     return {
         type: 'SIZE',
-        val: predictionValue,
-        mode: currentCategory,
-        history: history,
-        analysis: analyzer.analysis,
-        predictionDetails: analyzer.prediction
+        val: prediction,
+        mode: mode,
+        history: fullHistory.slice(-4).join('')
     };
 }
 
@@ -860,59 +622,66 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     state.resultHistory.push(bs);
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
-    if (!betPlaced) {
-        // No bet was placed: do not change the current martingale level.
-        // Watch mode still tracks prediction losses until the trigger condition is met.
-        if (!st.inMart && cfg.watch) {
-            if (wasWin) st.consecutiveLoss = 0;
-            else st.consecutiveLoss++;
-        }
-        return;
-    }
-
     if (wasWin) {
-        // Reset everything on a winning bet
+        // Reset everything on win
         st.consecutiveLoss = 0;
         st.level = 1;
         st.inMart = false;
+        st.waitAfter7 = false;
+        st.waitAfter7Remaining = 0;
     } else {
         st.consecutiveLoss++;
-        st.inMart = true;
-        st.level++;
 
-        // Check for Max Level
-        if (st.level > cfg.maxLvl) {
-            st.level = 1;
-            st.consecutiveLoss = 0;
-            st.inMart = false;
+        // CRITICAL FIX: If a bet was placed, we must be in Martingale mode
+        if (betPlaced) {
+            st.inMart = true;
         }
 
-        // Loss-streak skip rules
-       if (st.consecutiveLoss === 3 || st.consecutiveLoss === 4) {
-            state.skipCount = Math.max(state.skipCount, 5);
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> skip next 5 predictions.`);
-        } else if (st.consecutiveLoss === 5 || st.consecutiveLoss === 9) {
-            state.skipCount = Math.max(state.skipCount, 3);
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> skip next 3 predictions.`);
-        } else if (st.consecutiveLoss === 7) {
-            state.skipCount = Math.max(state.skipCount, 5);
-            console.log(`[USER ${userId}] 7 losses -> skip next 5 predictions.`);
-        }
+        if (st.inMart) {
+            // Already betting? Increment level
+            st.level++;
+            
+            // Check for Max Level
+            if (st.level > cfg.maxLvl) {
+                st.level = 1;
+                st.consecutiveLoss = 0;
+                st.inMart = false;
+            }
 
-        // --- L4 ENTRY CHECK (Safety) ---
-        // Only check patterns when entering Level 4 (after L3 loss)
-        if (st.level === 4) {
-            const last4 = state.resultHistory.slice(-4).join('');
-            const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
-            if (dangerousPatterns.includes(last4)) {
-                state.skipCount = Math.max(state.skipCount, 4);
-                console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
+            // --- LOSS-BASED SKIP RULES ---
+            if (st.consecutiveLoss === 3 || st.consecutiveLoss === 6) {
+                state.skipCount = Math.max(state.skipCount, 5);
+                st.inMart = false;
+                st.level = 1;
+                console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> Skipping 5 predictions.`);
+            }
+            if (st.consecutiveLoss === 7) {
+                st.inMart = false;
+                st.waitAfter7 = true;
+                st.waitAfter7Remaining = 3;
+                st.level = 8;
+                console.log(`[USER ${userId}] 7 losses -> Wait for 3 more losses, then bet L8.`);
+            }
+
+            // --- L4 ENTRY CHECK (Safety) ---
+            // Only check patterns when entering Level 4 (after L3 loss)
+            if (st.level === 4) {
+                const last4 = state.resultHistory.slice(-4).join('');
+                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
+                if (dangerousPatterns.includes(last4)) {
+                    state.skipCount = 4;
+                    console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
+                }
+            }
+        } else {
+            // WATCH PHASE: Check if trigger hit
+            if (!st.waitAfter7 && (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss)) {
+                st.inMart = true;
+                st.level = 1; // Start L1 for the NEXT period
             }
         }
     }
 }
-
-
 
 
 function getStatus(userId) {
@@ -921,6 +690,7 @@ function getStatus(userId) {
     const st = autobetState[userId];
     let skipInfo = "";
     if (state.skipCount > 0) skipInfo = ` | Skip: ${state.skipCount} remaining`;
+    if (st?.waitAfter7) skipInfo += ` | WaitL8: ${st.waitAfter7Remaining}`;
     return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
 }
 
@@ -1039,7 +809,7 @@ async function runPredict(userId, chatId) {
     if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
     sentPeriods[userId].add(next);
 
-    const signal = decidePrediction(list);
+    const signal = decidePrediction(list, st.level);
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
     let abLine = "🤖 AutoBet: OFF";
@@ -1050,10 +820,24 @@ async function runPredict(userId, chatId) {
         abLine = `⏭️ SKIP BET (${state.skipCount} left)`;
         state.skipCount--;
         canBet = false;
+    } else if (st.waitAfter7) {
+        if (st.waitAfter7Remaining > 0) {
+            abLine = `⏳ WAITING: ${st.waitAfter7Remaining} losses until L8`;
+            canBet = false;
+        } else {
+            st.inMart = true;
+            st.level = 8;
+        }
     } else if (cfg.watch && !st.inMart) {
-        abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
-        canBet = false;
-    } else if (cfg.enabled) {
+        if (st.consecutiveLoss < cfg.watchLoss) {
+            abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
+            canBet = false;
+        } else {
+            st.inMart = true;
+        }
+    }
+
+    if (canBet && cfg.enabled) {
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
@@ -1121,6 +905,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         // UPDATE LOGIC (Passing betPlaced to fix L1 repetition)
         updateAfterResult(userId, win, actual, betPlaced);
 
+        const state = userStates[userId];
         const s = stats[userId];
         s.total++;
         if (win) {
@@ -1137,13 +922,25 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
             else await handleLoss(userId, chatId, actual, num, betLevel);
 
             // Profit Check
-            const targetProfit = Number(cfg.targetProfit) || 1000;
-            if (pt.pnl >= targetProfit) {
+            if (pt.pnl >= cfg.targetProfit) {
                 st.isWaiting = true;
-                st.nextStartTime = Date.now() + (Number(cfg.restartDelay) || 1) * 60 * 1000;
+                st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); 
                 await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
             }
         } else {
+            if (st.waitAfter7) {
+                if (win) {
+                    st.waitAfter7 = false;
+                    st.waitAfter7Remaining = 0;
+                } else if (st.waitAfter7Remaining > 0) {
+                    st.waitAfter7Remaining--;
+                    if (st.waitAfter7Remaining === 0) {
+                        st.inMart = true;
+                        st.level = 8;
+                        await send(chatId, "🔄 Wait complete — betting next period at L8.");
+                    }
+                }
+            }
             // WATCH RESULT DASHBOARD (Full details as requested)
             if (win) {
                 await send(chatId, 
@@ -1183,45 +980,43 @@ function showStats(chatId,userId){
     const bar="🟦".repeat(d.total?Math.round(d.win/d.total*10):0)+"⬜".repeat(d.total?10-Math.round(d.win/d.total*10):10);
     send(chatId,"📊 STATS\n\nTotal: "+d.total+"\nWins: "+d.win+"\nLosses: "+d.loss+"\nAcc: "+rate+"%\n"+bar+"\n\nBest Win: "+d.maxWinStreak+" streak\nWorst Loss: "+d.maxLossStreak+" streak");
 }
-async function profitReport(chatId,userId){
-    initUser(userId);
+function profitReport(chatId,userId){
     const pt=profitTrack[userId],cfg=autobetCfg[userId];
     const rate=pt.totalBets?((pt.wins/pt.totalBets)*100).toFixed(1):"0.0";
     const amounts=cfg.customBets.slice(0,cfg.maxLvl);
-    let balance = "❌ No token";
-    const balResult = await getLiveBalance(userId);
-    if(balResult.success){
-        balance = "₹"+balResult.balance;
-    } else if (balResult.message){
-        balance = "⚠️ "+balResult.message;
-    }
     send(chatId,
 "💰 PROFIT REPORT\n\n"+
-"Balance: "+balance+"\n"+
-"Bets   : "+pt.totalBets+"\nWins   : "+pt.wins+"\nLoss   : "+pt.losses+"\nRate   : "+rate+"%\n"+
-"P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"Best W : "+pt.maxW+" | Worst L: "+pt.maxL+"\n\n"+
+"Bets  : "+pt.totalBets+"\nWins  : "+pt.wins+"\nLoss  : "+pt.losses+"\nRate  : "+rate+"%\n"+
+"P&L   : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"Best W: "+pt.maxW+" | Worst L: "+pt.maxL+"\n\n"+
 "Mart: ₹"+amounts.join("→₹")
     );
 }
 async function autobetStatus(chatId, userId) {
-    initUser(userId);
     const cfg = autobetCfg[userId], st = autobetState[userId], pt = profitTrack[userId];
     const amounts = cfg.customBets.slice(0, cfg.maxLvl);
     const creds = userCreds[userId] || {};
-
-    let liveBal = "❌ No token";
+    
+    let liveBal = "❌ Login Required";
     let token = getToken(userId);
-    const hasToken = token && token.length > 20;
-    if (hasToken) {
-        const result = await getLiveBalance(userId);
-        if (result.success) {
-            liveBal = "₹" + result.balance;
-        } else {
-            liveBal = "⚠️ " + result.message;
+    if (token && token.length > 20) {
+        try {
+            const r = await axios.get("https://api.bdg88zf.com/api/webapi/GetBalance", {
+                headers: {
+                    "Authorization": "Bearer " + token,
+                    "Ar-Origin": "https://bdgwin901.com",
+                    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                },
+                timeout: 5000
+            });
+            if (r.data && r.data.code === 0) {
+                liveBal = "₹" + r.data.data.balance;
+            } else {
+                liveBal = "⚠️ Token Expired";
+            }
+        } catch (e) {
+            liveBal = "⚠️ API Error";
         }
-    } else if (creds.phone) {
-        liveBal = "❌ Login Required";
     }
 
     let waitLine = "";
@@ -1274,44 +1069,13 @@ const autobetMenu={keyboard:[
 //  BOT INIT
 // ============================================================
 let bot;
-let pollingRecovery = false;
-function recoverPolling(err) {
-    if (pollingRecovery || !bot) return;
-    pollingRecovery = true;
-    console.warn("[POLL] Recovering from polling error:", err?.message || err);
-    bot.stopPolling().catch(() => {});
-    setTimeout(() => {
-        try {
-            bot.startPolling();
-            console.log("[POLL] Polling restarted successfully.");
-        } catch (e) {
-            console.error("[POLL] Polling restart failed:", e?.message || e);
-        } finally {
-            pollingRecovery = false;
-        }
-    }, 5000);
-}
 function startBot(){
     if(bot){try{bot.stopPolling();}catch(e){}}
     bot=new TelegramBot(BOT_TOKEN,{polling:{interval:1000,autoStart:true,params:{timeout:30}}});
-    bot.on("polling_error",err=>{
-        const msg = err?.message || String(err);
-        if (msg.includes("ECONNRESET") || msg.includes("EFATAL") || msg.includes("socket hang up")) {
-            recoverPolling(err);
-            return;
-        }
-        console.error("Poll:", msg);
-    });
-    bot.on("error",err=>{
-        const msg = err?.message || String(err);
-        if (msg.includes("ECONNRESET") || msg.includes("EFATAL") || msg.includes("socket hang up")) {
-            console.warn("Bot error recovered:", msg);
-            return;
-        }
-        console.error("Bot:", msg);
-    });
+    bot.on("polling_error",err=>{console.error("Poll:",err.message);});
+    bot.on("error",err=>{console.error("Bot:",err.message);});
     addHandlers();
-    console.log("✅ SIVA BOT running...");
+    console.log("✅ Lucifer AI running...");
     startAutoLoginTask();
 }
 
@@ -1390,7 +1154,7 @@ function addHandlers(){
     bot.onText(/\/owner/,(msg)=>{
         if(msg.from.id!==OWNER_ID)return;
         if(ownerLoggedIn)return send(OWNER_ID,"Already in!",{reply_markup:ownerMenu});
-        ownerState={action:"login"};send(OWNER_ID,"� Owner password:");
+        ownerState={action:"login"};send(OWNER_ID,"🔐 Owner password:");
     });
 
     bot.onText(/\/adminlogin (.+)/,(msg,match)=>{
@@ -1416,7 +1180,7 @@ function addHandlers(){
             else if(s.action==="removeadmin"){const t=parseInt(text);if(isNaN(t))return;delete adminPasswords[t];delete adminLoggedIn[t];ownerState=null;send(OWNER_ID,"🚫 Removed",{reply_markup:ownerMenu});return;}
             else if(s.action==="genkey"){const d=parseInt(text);if(isNaN(d)||d<1)return send(OWNER_ID,"❌ Days?");const k=generateKey(d,OWNER_ID);ownerState=null;return send(OWNER_ID,"🔑 Key:\n\n"+k+"\n\n"+d+"d\n/key "+k,{reply_markup:ownerMenu});}
             else if(s.action==="adduser"){if(!s.step2){const t=parseInt(text);if(isNaN(t))return send(OWNER_ID,"❌");ownerState={action:"adduser",step2:true,tid:t};return send(OWNER_ID,"ID:"+t+"\nDays?");}else{const d=parseInt(text);if(isNaN(d)||d<1)return send(OWNER_ID,"❌");usersAccess[s.tid]=Date.now()+d*86400000;ownerState=null;send(OWNER_ID,"✅ "+s.tid+" "+d+"d",{reply_markup:ownerMenu});send(s.tid,"🎊 VIP! "+d+" days\n▶️ Start Prediction!");return;}}
-            else if(s.action==="removeuser"){const t=parseInt(text);if(isNaN(t))return;if(Number(t)===Number(OWNER_ID))return send(OWNER_ID,"❌ Owner access cannot be removed.",{reply_markup:ownerMenu});const was=hasAccess(t);delete usersAccess[t];running[t]=false;ownerState=null;send(OWNER_ID,was?"🚫 Removed":"⚠️ Not active",{reply_markup:ownerMenu});if(was)send(t,"🔴 Access removed.");return;}
+            else if(s.action==="removeuser"){const t=parseInt(text);if(isNaN(t))return;const was=hasAccess(t);delete usersAccess[t];running[t]=false;ownerState=null;send(OWNER_ID,was?"🚫 Removed":"⚠️ Not active",{reply_markup:ownerMenu});if(was)send(t,"🔴 Access removed.");return;}
             else if(s.action==="settoken"){GLOBAL_TOKEN=text.trim().replace(/^Bearer\s+/i,"");ownerState=null;return send(OWNER_ID,"✅ Global Token set!",{reply_markup:ownerMenu});}
         }
 
@@ -1456,7 +1220,7 @@ function addHandlers(){
             if(AB.includes(text)){ delete adminState[id]; }
             else if(s.action==="genkey"){const d=parseInt(text);if(isNaN(d)||d<1)return send(id,"❌ Days?");const k=generateKey(d,id);delete adminState[id];return send(id,"🔑 Key:\n\n"+k+"\n\n"+d+"d",{reply_markup:adminMenu});}
             else if(s.action==="adduser"){if(!s.step2){const t=parseInt(text);if(isNaN(t))return send(id,"❌");adminState[id]={action:"adduser",step2:true,tid:t};return send(id,"ID:"+t+"\nDays?");}else{const d=parseInt(text);if(isNaN(d)||d<1)return send(id,"❌");usersAccess[s.tid]=Date.now()+d*86400000;delete adminState[id];send(id,"✅ "+s.tid+" "+d+"d",{reply_markup:adminMenu});send(s.tid,"🎊 ACCESS! "+d+"d");return;}}
-            else if(s.action==="removeuser"){const t=parseInt(text);if(isNaN(t))return;if(Number(t)===Number(OWNER_ID))return send(id,"❌ Owner access cannot be removed.",{reply_markup:adminMenu});const was=hasAccess(t);delete usersAccess[t];running[t]=false;delete adminState[id];send(id,was?"🚫 Removed":"⚠️ Not active",{reply_markup:adminMenu});if(was)send(t,"🔴 Removed.");return;}
+            else if(s.action==="removeuser"){const t=parseInt(text);if(isNaN(t))return;const was=hasAccess(t);delete usersAccess[t];running[t]=false;delete adminState[id];send(id,was?"🚫 Removed":"⚠️ Not active",{reply_markup:adminMenu});if(was)send(t,"🔴 Removed.");return;}
         }
 
         if(hasAccess(id) && userAction[id]){
@@ -1513,7 +1277,6 @@ function addHandlers(){
             if(!hasAccess(id))return send(id,"❌ No access.");
             const cfg=autobetCfg[id],creds=userCreds[id]||{};
             const amounts=MULT.slice(0,cfg.maxLvl).map(m=>cfg.baseBet*m);
-            const targetProfit = Number(cfg.targetProfit) || 1000;
             return send(id,
 "🤖 AUTOBET SETTINGS\n\n"+
 "Status   : "+(cfg.enabled?"✅ ON":"❌ OFF")+"\n"+
@@ -1522,8 +1285,7 @@ function addHandlers(){
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+cfg.watchLoss+" consecutive\n"+
 "Base Bet : ₹"+cfg.baseBet+"\n"+
-"Max Level: "+cfg.maxLvl+"\n"+
-"Target   : ₹"+targetProfit+"\n\n"+
+"Max Level: "+cfg.maxLvl+"\n\n"+
 "Mart: ₹"+amounts.join("→₹")+"\n\n"+
 "/setcreds 916381605525 PASSWORD\n"+
 "/setmytoken TOKEN",
@@ -1565,8 +1327,8 @@ if(text==="🔢 Set Watch Losses"){
             if(text === "🔙 Back") { delete userAction[id]; }
             
             else if(s.action === "settarget"){
-                const v = Number(text);
-                if(!Number.isFinite(v) || v < 10) return send(id, "❌ Min ₹10 kudunga!");
+                const v = parseFloat(text);
+                if(isNaN(v) || v < 10) return send(id, "❌ Min ₹10 kudunga!");
                 autobetCfg[id].targetProfit = v;
                 delete userAction[id];
                 return send(id, "✅ Profit target set to ₹"+v, {reply_markup: autobetMenu});
@@ -1604,7 +1366,15 @@ if(text==="🔢 Set Watch Losses"){
             if(running[id])return send(msg.chat.id,"⚠️ Already running!");
             if(!getToken(id)&&userCreds[id]?.phone){await send(msg.chat.id,"🔄 Auto login...");await autoLogin(id,msg.chat.id,true);}
             running[id]=true;sentPeriods[id]=new Set();
-            autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
+            autobetState[id]={
+                level:1,
+                consecutiveLoss:0,
+                inMart:false,
+                isWaiting:false,
+                nextStartTime:null,
+                waitAfter7:false,
+                waitAfter7Remaining:0
+            };
 
             // Load previous B/S history from API
             const prevList = await fetchList();
