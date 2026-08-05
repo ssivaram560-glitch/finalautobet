@@ -106,9 +106,28 @@ async function fetchList() {
         return null;
     }
 }
-async function getLiveBalance(userId) {
-    const token = getToken(userId);
-    if (!token) return { success:false, message:"No token" };
+// Helper parser function
+async function parseBalanceResponse(r) {
+    if (r.data && r.data.code === 0 && r.data.data && typeof r.data.data.balance !== 'undefined') {
+        return { success: true, balance: r.data.data.balance };
+    }
+    return {
+        success: false,
+        message: r.data && r.data.msg ? r.data.msg : "Token expired or invalid"
+    };
+}
+
+async function getLiveBalance(userId, chatId = null) {
+    let token = getToken(userId);
+    
+    // Optional: Auto login if token is missing
+    if (!token && chatId) {
+        const ok = await autoLogin(userId, chatId, true);
+        if (ok) token = getToken(userId);
+    }
+
+    if (!token) return { success: false, message: "No token" };
+
     const url = "https://api.bdg88zf.com/api/webapi/GetBalance";
     const headers = {
         "Authorization": "Bearer " + token,
@@ -116,34 +135,23 @@ async function getLiveBalance(userId) {
         "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
     };
 
-    async function parseResponse(r) {
-        if (r.data && r.data.code === 0 && r.data.data && typeof r.data.data.balance !== 'undefined') {
-            return { success:true, balance:r.data.data.balance };
-        }
-        return {
-            success:false,
-            message: r.data && r.data.msg ? r.data.msg : "Token expired or invalid"
-        };
-    }
-
     try {
         const r = await axios.get(url, { headers, timeout: 5000 });
-        return await parseResponse(r);
+        return await parseBalanceResponse(r);
     } catch (e) {
         if (e.response && e.response.status === 405) {
             try {
                 const r2 = await axios.post(url, {}, { headers, timeout: 5000 });
-                return await parseResponse(r2);
+                return await parseBalanceResponse(r2);
             } catch (e2) {
                 const errMsg = e2.response?.data?.msg || e2.message || "API Error";
-                return { success:false, message: errMsg };
+                return { success: false, message: errMsg };
             }
         }
         const errMsg = e.response?.data?.msg || e.message || "API Error";
-        return { success:false, message: errMsg };
+        return { success: false, message: errMsg };
     }
 }
-
 
 function initUser(id) {
     if (!stats[id])        stats[id]        = { total:0,win:0,loss:0,lossStreak:0,winStreak:0,maxWinStreak:0,maxLossStreak:0 };
