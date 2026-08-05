@@ -1031,17 +1031,21 @@ async function runPredict(userId, chatId) {
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
     let abLine = "🤖 AutoBet: OFF";
-    let canBet = cfg.enabled && !cfg.watch; // Only bet if enabled AND not in watch mode
+    let canBet = false;
 
-    // --- WATCH LOSS LOGIC ---
-    if (state.skipCount > 0) {
+    if (!cfg.enabled) {
+        abLine = "🤖 AutoBet: OFF";
+        canBet = false;
+    } else if (state.skipCount > 0) {
         abLine = `⏭️ SKIP BET (${state.skipCount} left)`;
         state.skipCount--;
         canBet = false;
-    } else if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) { // Watch mode, but not enough losses yet
+    } else if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) {
         abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
         canBet = false;
-    } else if (cfg.enabled) {
+    } else {
+        // Condition for betting met (either direct bet or watch condition satisfied)
+        canBet = true;
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
@@ -1061,14 +1065,6 @@ async function runPredict(userId, chatId) {
 
     let betPlaced = false;
     if (canBet) { 
-        const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
-        if (result && result.ok) {
-            betPlaced = true;
-            await send(chatId, "✅ Bet Success! ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
-        } else if (result && !result.ok) {
-            await send(chatId, "❌ Bet Failed: " + (result.msg || "Unknown error"));
-        }
-    } else if (cfg.watch && st.consecutiveLoss >= cfg.watchLoss) { // Watch mode met condition, now bet
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
             betPlaced = true;
