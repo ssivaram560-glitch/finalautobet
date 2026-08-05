@@ -10,7 +10,7 @@ const puppeteer   = require('puppeteer');
 const BOT_TOKEN    ="8692459169:AAFW_sv72xScUpn0xFsaPTCuzJpNLO0EIBU";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
-const ADMIN_HANDLE = "@lucifer1570";
+const ADMIN_HANDLE = "@Sivakutty1";
 const REG_LINK     = "https://bdgwinuu.com/#/register?invitationCode=7442815992780";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
@@ -147,10 +147,14 @@ function initUser(id) {
         baseBet:1, 
         maxLvl:5, 
         enabled:false, 
+        balance:0,
         customBets:[1,3,9,27,81],
-        targetProfit: 1000,    // NEW: Profit target set panna
-        restartDelay: 1        // NEW: Restart time (hours) set panna
+        targetProfit: 1000,
+        restartDelay: 1
     };
+    if (!Array.isArray(autobetCfg[id].customBets) || autobetCfg[id].customBets.length === 0) {
+        autobetCfg[id].customBets = [1,3,9,27,81];
+    }
     if (!autobetState[id]) autobetState[id] = { 
         level:1, 
         consecutiveLoss:0, 
@@ -163,12 +167,39 @@ function initUser(id) {
     if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
 
+function getLevelBetAmount(cfg, level) {
+    const idx = Math.max(0, Math.min(level - 1, (cfg.customBets || []).length - 1));
+    if (Array.isArray(cfg.customBets) && cfg.customBets[idx] !== undefined) {
+        return cfg.customBets[idx];
+    }
+    return (cfg.baseBet || 1) * (MULT[idx] || 1);
+}
+
 function hasAccess(id)  { return Number(id) === OWNER_ID || !!(usersAccess[id] && Date.now() < usersAccess[id]); }
 function daysLeft(id)   { return Number(id) === OWNER_ID ? "∞" : usersAccess[id] ? ((usersAccess[id]-Date.now())/86400000).toFixed(1) : "0"; }
 function isAdmin(id)    { return adminPasswords[id] !== undefined; }
 function isAdminIn(id)  { return adminLoggedIn[id] === true; }
 function sleep(ms)      { return new Promise(r => setTimeout(r, ms)); }
-function getToken(id)   { return userTokens[id] || GLOBAL_TOKEN || ""; }
+function getToken(id)   { return (userTokens[id] || GLOBAL_TOKEN || "").trim(); }
+
+async function ensureTokenForUser(userId, chatId) {
+    let token = getToken(userId);
+    if (token && token.length >= 20) return true;
+
+    const creds = userCreds[userId] || {};
+    if (!creds.phone || !creds.pass) {
+        return false;
+    }
+
+    const ok = await autoLogin(userId, chatId, true);
+    return !!ok;
+}
+
+async function refreshUserToken(userId, chatId) {
+    userTokens[userId] = "";
+    const ok = await autoLogin(userId, chatId, true);
+    return ok ? getToken(userId) : "";
+}
 
 function generateKey(days, by) {
     const k = "EARN WITH ME-"+crypto.randomBytes(3).toString('hex').toUpperCase()+"-"+crypto.randomBytes(2).toString('hex').toUpperCase();
@@ -283,7 +314,7 @@ async function autoLogin(userId, chatId, silent = false) {
         return false;
     }
 
-      let browser;
+    let browser;
     try {
         browser = await puppeteer.launch({
             headless: true, 
@@ -301,7 +332,6 @@ async function autoLogin(userId, chatId, silent = false) {
             }
             req.continue();
         });
-
 
         await page.goto('https://bdgwin901.com/#/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
         await page.waitForSelector('input', { timeout: 30000 });
@@ -399,7 +429,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     }
 
     const cfg     = autobetCfg[userId];
-    const betMult = cfg.customBets[level-1] || (cfg.baseBet * MULT[level-1]);
+    const betMult = getLevelBetAmount(cfg, level);
     let bc = "";
 
     const maxRetries = 3; // Maximum number of retries
@@ -409,7 +439,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     if (predType==="COLOR") bc = prediction==="RED" ? "Color_Red"    : "Color_Green";
 
     const params = {
-        amount:      1,
+        amount:      betMult,
         betContent:  bc,
         betMultiple: betMult,
         gameCode:    "WinGo_30S", 
@@ -472,11 +502,13 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         }
 
         if (d.code===401||d.code===40100||(d.msg&&(d.msg.toLowerCase().includes("token")||d.msg.toLowerCase().includes("expired")))) {
-            
             await send(chatId,"🔄 Token expired — Re-login...");
-            const ok = await autoLogin(userId,chatId,true);
-            if(ok) await send(chatId,"✅ Re-login OK!");
-            else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
+            const refreshed = await refreshUserToken(userId, chatId);
+            if (refreshed) {
+                await send(chatId,"✅ Re-login OK!");
+                return false;
+            }
+            await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
             return false;
         }
 
@@ -489,11 +521,13 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
         // For now, let's assume network errors are not retryable in the same way as specific API messages.
         // If the error is token related, handle it as before.
         if (err.response && (err.response.status === 401 || (err.response.data && (err.response.data.msg && (err.response.data.msg.toLowerCase().includes("token") || err.response.data.msg.toLowerCase().includes("expired")))))) {
-            
             await send(chatId,"🔄 Token error during bet — Re-login...");
-            const ok = await autoLogin(userId,chatId,true);
-            if(ok) await send(chatId,"✅ Re-login OK!");
-            else   await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
+            const refreshed = await refreshUserToken(userId, chatId);
+            if (refreshed) {
+                await send(chatId,"✅ Re-login OK!");
+                return false;
+            }
+            await send(chatId,"❌ Re-login fail! /setcreds பண்ணu.");
             return false;
         }
         // If it's not a token error, and it's a network error, we can consider retrying here too.
@@ -571,10 +605,30 @@ function getPredictionFromMode(resultHistory, mode) {
 //  PREDICTION LOGIC
 // ============================================================
 
-function decidePrediction(list) {
+function decidePrediction(list, level = 1) {
     if (!list || list.length === 0) return null;
 
     const fullHistory = buildBSFromList(list, 10);
+    if (fullHistory.length === 0) return null;
+
+    if (level <= 3) {
+        const last5 = fullHistory.slice(-5);
+        const counts = last5.reduce((acc, item) => {
+            acc[item] = (acc[item] || 0) + 1;
+            return acc;
+        }, {});
+        const bigCount = counts.B || 0;
+        const smallCount = counts.S || 0;
+        const prediction = bigCount >= smallCount ? 'BIG' : 'SMALL';
+
+        return {
+            type: 'SIZE',
+            val: prediction,
+            mode: `LAST5:${last5.join('')}`,
+            history: last5.join('')
+        };
+    }
+
     if (fullHistory.length < 2) return null;
 
     const mode = getModeFromLast2(fullHistory);
@@ -598,66 +652,51 @@ function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
     const state = userStates[userId];
     const st = autobetState[userId];
     const cfg = autobetCfg[userId];
-
+    
     const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
     state.resultHistory.push(bs);
     if (state.resultHistory.length > 20) state.resultHistory.shift();
 
+    // If no actual bet was placed, do not advance the ladder or loss streak.
+    // Keep the current level so the next retry uses the same amount again.
+    if (!betPlaced) {
+        return;
+    }
+
     if (wasWin) {
         // Reset everything on win
+        state.skipCount = 0;
         st.consecutiveLoss = 0;
         st.level = 1;
         st.inMart = false;
         st.waitAfter7 = false;
         st.waitAfter7Remaining = 0;
-        state.skipCount = 0; 
     } else {
         st.consecutiveLoss++;
+        st.inMart = true;
+        st.level++;
 
-        // If a bet was placed and lost, progress Martingale
-        if (betPlaced) {
-            st.inMart = true;
-            st.level++;
-            
-            // Check for Max Level
-            if (st.level > cfg.maxLvl) {
-                st.level = 1;
-                st.consecutiveLoss = 0;
-                st.inMart = false;
-                console.log(`[USER ${userId}] Max Level reached. Resetting.`);
-                return;
-            }
+        // --- LOSS-BASED SKIP RULES ---
+        if (st.consecutiveLoss === 3 || st.consecutiveLoss === 6) {
+            state.skipCount = Math.max(state.skipCount, 5);
+            st.inMart = false;
+            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> Skipping 5 predictions.`);
+        }
+        if (st.consecutiveLoss === 7) {
+            st.inMart = false;
+            st.waitAfter7 = true;
+            st.waitAfter7Remaining = 3;
+            st.level = 8;
+            console.log(`[USER ${userId}] 7 losses -> Wait for 3 more losses, then bet L8.`);
+        }
 
-            // --- LOSS-BASED SKIP RULES ---
-            if (st.consecutiveLoss === 3 || st.consecutiveLoss === 6) {
-                state.skipCount = 5;
-                st.inMart = false;
-                // Level is NOT reset to 1 here, so it maintains the current level for next entry
-                console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> Skipping 5 predictions.`);
-            }
-            
-            if (st.consecutiveLoss === 7) {
-                st.inMart = false;
-                st.waitAfter7 = true;
-                st.waitAfter7Remaining = 3;
-                st.level = 8; // Prepare for L8
-                console.log(`[USER ${userId}] 7 losses -> Wait for 3 more losses, then bet L8.`);
-            }
-
-            // --- L4 ENTRY CHECK (Safety) ---
-            if (st.level === 4) {
-                const last4 = state.resultHistory.slice(-4).join('');
-                const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
-                if (dangerousPatterns.includes(last4)) {
-                    state.skipCount = 4;
-                    st.inMart = false;
-                    console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
-                }
-            }
-        } else {
-            // WATCH PHASE: Check if trigger hit
-            if (!st.waitAfter7 && state.skipCount === 0 && (!cfg.watch || st.consecutiveLoss >= cfg.watchLoss)) {
-                st.inMart = true;
+        // --- L4 ENTRY CHECK (Safety) ---
+        if (st.level === 4) {
+            const last4 = state.resultHistory.slice(-4).join('');
+            const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
+            if (dangerousPatterns.includes(last4)) {
+                state.skipCount = 4;
+                console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
             }
         }
     }
@@ -678,7 +717,7 @@ function getStatus(userId) {
 async function handleWin(userId, chatId, actual, num, betLevel) {
     const pt = profitTrack[userId];
     const cfg = autobetCfg[userId];
-    const amt = cfg.customBets[betLevel-1] || (cfg.baseBet * MULT[betLevel-1]);
+    const amt = getLevelBetAmount(cfg, betLevel);
     const profit = amt * 0.98;
     
     pt.totalBets++; pt.wins++; pt.pnl += profit; 
@@ -707,16 +746,15 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     const st = autobetState[userId];
     const pt = profitTrack[userId];
     const cfg = autobetCfg[userId];
-    const amt = cfg.customBets[betLevel-1] || (cfg.baseBet * MULT[betLevel-1]);
+    const amt = getLevelBetAmount(cfg, betLevel);
     
     pt.totalBets++; pt.losses++; pt.pnl -= amt; 
     pt.totalBetAmount = (pt.totalBetAmount || 0) + amt;
     pt.lossStreak++; pt.winStreak = 0;
     if(pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
-    if(betLevel < cfg.maxLvl){
-        const next = cfg.customBets[st.level-1] || (cfg.baseBet * MULT[st.level-1]);
-        await send(chatId,
+    const next = getLevelBetAmount(cfg, st.level);
+    await send(chatId,
 "╔══════════════════════════╗\n"+
 "║  ❌ LOSS                 ║\n"+
 "╠══════════════════════════╣\n"+
@@ -727,21 +765,9 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
 "╠══════════════════════════╣\n"+
 "║ Next L"+st.level+" : ₹"+next+"\n"+
 "╚══════════════════════════╝"
-        );
-    } else {
-        await send(chatId,
-"╔══════════════════════════╗\n"+
-"║  💀 MAX LEVEL LOSS       ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Loss   : -₹"+amt+"\n"+
-"║ P&L    : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"║ Reset  : L1 | Watch 0/"+cfg.watchLoss+"\n"+
-"╚══════════════════════════╝"
-        );
-    }
+    );
     await sendSticker(chatId, LOSS_STICKER);
 }
-
 // ============================================================
 //  PREDICT LOOP
 // ============================================================
@@ -765,7 +791,6 @@ function stk(arr, key) {
     }
     return { val, count };
 }
-
 async function runPredict(userId, chatId) {
     if(!running[userId]) return;
     initUser(userId);
@@ -775,30 +800,32 @@ async function runPredict(userId, chatId) {
 
     // Profit Target Check
     if (st.isWaiting) {
-        const remaining = st.nextStartTime - Date.now();
-        if (remaining <= 0) {
+        if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
             profitTrack[userId].pnl = 0; 
             await send(chatId, "🔄 Timed Restart! Starting new section...");
         } else {
-            return setTimeout(()=>runPredict(userId,chatId), Math.max(5000, remaining));
+            return setTimeout(()=>runPredict(userId,chatId), 30000);
         }
     }
 
     const list = await fetchList();
     if(!list) return setTimeout(()=>runPredict(userId,chatId), 15000);
 
+    // Keep token available even during skip/watch/wait phases.
+    await ensureTokenForUser(userId, chatId);
+
     const next = (BigInt(list[0].issueNumber)+1n).toString();
     if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
     sentPeriods[userId].add(next);
 
-    const signal = decidePrediction(list);
+    const signal = decidePrediction(list, st.level);
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
     let abLine = "🤖 AutoBet: OFF";
     let canBet = cfg.enabled;
 
-    // --- LOGIC FOR SKIP AND WATCH ---
+    // --- WATCH LOSS LOGIC ---
     if (state.skipCount > 0) {
         abLine = `⏭️ SKIP BET (${state.skipCount} left)`;
         state.skipCount--;
@@ -810,7 +837,6 @@ async function runPredict(userId, chatId) {
         } else {
             st.inMart = true;
             st.level = 8;
-            st.waitAfter7 = false;
         }
     } else if (cfg.watch && !st.inMart) {
         if (st.consecutiveLoss < cfg.watchLoss) {
@@ -821,8 +847,8 @@ async function runPredict(userId, chatId) {
         }
     }
 
-    if (canBet && cfg.enabled && st.inMart) {
-        const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
+    if (canBet && cfg.enabled) {
+        const curBet = getLevelBetAmount(cfg, st.level);
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
 
@@ -840,37 +866,37 @@ async function runPredict(userId, chatId) {
     );
 
     let betPlaced = false;
-    if (canBet && cfg.enabled && st.inMart) { 
+    if (canBet) { 
         const result = await placeBet(userId, chatId, next, signal.val, signal.type, st.level);
         if (result && result.ok) {
             betPlaced = true;
+            // இதோ இந்த மெசேஜ் தான் பெட் கட்டியவுடன் வரும்
             await send(chatId, "✅ Bet Success! ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
         } else if (result && !result.ok) {
             await send(chatId, "❌ Bet Failed: " + (result.msg || "Unknown error"));
-            st.inMart = false; // Reset on failure
         }
     }
 
     checkResult(userId, chatId, next, signal.val, signal.type, betPlaced);
 }
-
 // ============================================================
 //  RESULT CHECKER
 // ============================================================
 
+
+// 4. checkResult - Robust Update & Full UI
 async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
     let tries = 0;
     const cfg = autobetCfg[userId];
     const st = autobetState[userId];
     const pt = profitTrack[userId];
-    const s = stats[userId];
     
     const iv = setInterval(async () => {
         if (!running[userId]) return clearInterval(iv);
         if (++tries > 25) {
             clearInterval(iv);
             await logBoth(chatId, "⏱ Timeout — checking next period...");
-            setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 5000);
+            setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 3000);
             return;
         }
         const list = await fetchList(); if (!list) return;
@@ -884,11 +910,13 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         
         const win = predicted === actual;
-        const betLevel = st.level; 
+        const betLevel = st.level; // Save current level before update
 
-        // UPDATE LOGIC
+        // UPDATE LOGIC (Passing betPlaced to fix L1 repetition)
         updateAfterResult(userId, win, actual, betPlaced);
 
+        const state = userStates[userId];
+        const s = stats[userId];
         s.total++;
         if (win) {
             s.win++; s.winStreak++; s.lossStreak = 0;
@@ -899,24 +927,31 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         }
 
         if (betPlaced) {
+            // BET RESULT DASHBOARD
             if (win) await handleWin(userId, chatId, actual, num, betLevel);
             else await handleLoss(userId, chatId, actual, num, betLevel);
 
+            // Profit Check
             if (pt.pnl >= cfg.targetProfit) {
                 st.isWaiting = true;
                 st.nextStartTime = Date.now() + (cfg.restartDelay * 60 * 1000); 
                 await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
             }
         } else {
-            // Handle non-betting wait updates
-            if (st.waitAfter7 && !win && st.waitAfter7Remaining > 0) {
-                st.waitAfter7Remaining--;
-                if (st.waitAfter7Remaining === 0) {
-                    await send(chatId, "🔄 Wait complete — betting next period at L8.");
+            if (st.waitAfter7) {
+                if (win) {
+                    st.waitAfter7 = false;
+                    st.waitAfter7Remaining = 0;
+                } else if (st.waitAfter7Remaining > 0) {
+                    st.waitAfter7Remaining--;
+                    if (st.waitAfter7Remaining === 0) {
+                        st.inMart = true;
+                        st.level = 8;
+                        await send(chatId, "🔄 Wait complete — betting next period at L8.");
+                    }
                 }
             }
-
-            // WATCH RESULT UI
+            // WATCH RESULT DASHBOARD (Full details as requested)
             if (win) {
                 await send(chatId, 
                     "╔══════════════════════════╗\n"+
@@ -947,7 +982,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 
-
 // ============================================================
 //  STATS
 // ============================================================
@@ -959,65 +993,47 @@ function showStats(chatId,userId){
 function profitReport(chatId,userId){
     const pt=profitTrack[userId],cfg=autobetCfg[userId];
     const rate=pt.totalBets?((pt.wins/pt.totalBets)*100).toFixed(1):"0.0";
-    const amounts=cfg.customBets.slice(0,cfg.maxLvl);
-    send(chatId,
+const amounts=Array.isArray(cfg.customBets)&&cfg.customBets.length?cfg.customBets:MULT.slice(0,cfg.maxLvl).map(m => (cfg.baseBet || 1) * m);
+const visibleBalance = Number(cfg.balance || 0) + Number(pt.pnl || 0);
+const statusText = pt.pnl >= 0 ? "Profit" : "Loss";
+send(chatId,
 "💰 PROFIT REPORT\n\n"+
-"Bets  : "+pt.totalBets+"\nWins  : "+pt.wins+"\nLoss  : "+pt.losses+"\nRate  : "+rate+"%\n"+
-"P&L   : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
-"Best W: "+pt.maxW+" | Worst L: "+pt.maxL+"\n\n"+
-"Mart: ₹"+amounts.join("→₹")
-    );
+"Balance : ₹"+visibleBalance.toFixed(2)+"\n"+
+"Status  : "+statusText+"\n"+
+"Bets    : "+pt.totalBets+"\nWins    : "+pt.wins+"\nLoss    : "+pt.losses+"\nRate    : "+rate+"%\n"+
+"P&L     : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n"+
+"Best W  : "+pt.maxW+" | Worst L: "+pt.maxL+"\n\n"+
+"Mart    : ₹"+amounts.join("→₹")
+);
 }
 async function autobetStatus(chatId, userId) {
-    const cfg = autobetCfg[userId], st = autobetState[userId], pt = profitTrack[userId];
-    const amounts = cfg.customBets.slice(0, cfg.maxLvl);
-    const creds = userCreds[userId] || {};
-    
-    let liveBal = "❌ Login Required";
-    let token = getToken(userId);
-    if (token && token.length > 20) {
-        try {
-            const r = await axios.get("https://api.bdg88zf.com/api/webapi/GetBalance", {
-                headers: {
-                    "Authorization": "Bearer " + token,
-                    "Ar-Origin": "https://bdgwin901.com",
-                    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
-                },
-                timeout: 5000
-            });
-            if (r.data && r.data.code === 0) {
-                liveBal = "₹" + r.data.data.balance;
-            } else {
-                liveBal = "⚠️ Token Expired";
-            }
-        } catch (e) {
-            liveBal = "⚠️ API Error";
-        }
-    }
+const cfg = autobetCfg[userId], st = autobetState[userId], pt = profitTrack[userId];
+const amounts = Array.isArray(cfg.customBets) && cfg.customBets.length ? cfg.customBets : MULT.slice(0, cfg.maxLvl).map(m => (cfg.baseBet || 1) * m);
+const creds = userCreds[userId] || {};
+const token = getToken(userId);
 
-    let waitLine = "";
-    if (st.isWaiting) {
-        const diff = Math.round((st.nextStartTime - Date.now()) / 60000);
-        waitLine = "\n⏳ Waiting: " + diff + " mins to restart";
-    }
+let waitLine = "";
+if (st.isWaiting) {
+    const diff = Math.round((st.nextStartTime - Date.now()) / 60000);
+    waitLine = "\n⏳ Waiting: " + diff + " mins to restart";
+}
 
-    send(chatId,
+send(chatId,
 "🤖 AUTOBET STATUS\n\n"+
-"💰 Live Balance: "+liveBal+"\n"+
+"Balance  : ₹"+(Number(cfg.balance || 0)).toFixed(2)+"\n"+
 "Enabled  : "+(cfg.enabled?"✅ ON":"❌ OFF")+"\n"+
 "Token    : "+(token.length>20?"✅":"❌")+"\n"+
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n"+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+st.consecutiveLoss+"/"+cfg.watchLoss+"\n"+
 "Base Bet : ₹"+cfg.baseBet+"\n"+
-"Max Level: "+cfg.maxLvl+"\n"+
 "Target Profit: ₹"+cfg.targetProfit+"\n"+
-"Section Delay: "+cfg.restartDelay+" mins"+ // Hours-la irunthu Minutes-ku mathi irukken
+"Section Delay: "+cfg.restartDelay+" mins"+
 waitLine+"\n"+
 "In Mart  : "+(st.inMart?"YES":"NO")+"\n"+
 "P&L      : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n\n"+
 "Mart: ₹"+amounts.join("→₹")
-    );
+);
 }
 
 
@@ -1035,10 +1051,10 @@ const adminMenu={keyboard:[["👥 Active Users","🔑 Generate Key"],["🟢 Add 
 const autobetMenu={keyboard:[
     ["✅ Enable AutoBet","❌ Disable AutoBet"],
     ["👀 Watch Mode ON","👀 Watch Mode OFF"],
-    ["💰 Set Base Bet","📈 Set Max Level"],
+    ["📝 Set Custom Bets","💵 Set Balance"],
     ["🎯 Set Profit Target", "⏳ Set Section Delay"],
     ["🔢 Set Watch Losses","📊 AutoBet Status"],
-    ["📝 Set Custom Bets","🔙 Back"]
+    ["🔙 Back"]
 ],resize_keyboard:true};
 
 // ============================================================
@@ -1052,7 +1068,6 @@ function startBot(){
     bot.on("error",err=>{console.error("Bot:",err.message);});
     addHandlers();
     console.log("✅ Lucifer AI running...");
-    startAutoLoginTask();
 }
 
 async function send(chatId,text,opts={}){
@@ -1064,19 +1079,8 @@ async function sendSticker(chatId,sid){try{await bot.sendSticker(chatId,sid);}ca
 // ============================================================
 //  AUTO LOGIN TASK
 // ============================================================
-function startAutoLoginTask() {
-    console.log("🕒 [TASK] Auto-login scheduler started (10 mins)");
-    setInterval(async () => {
-        const userIds = Object.keys(userCreds);
-        for (const userId of userIds) {
-            const creds = userCreds[userId];
-            if (creds && creds.phone && creds.pass) {
-                await logBoth(userId, `🕒 [TASK] Attempting periodic login for user: ${userId}`);
-                await robustLogin(userId, userId, false); 
-            }
-        }
-    }, 7 * 60 * 1000); 
-}
+// Periodic auto-login scheduler removed by request.
+// Manual login / explicit start-login flow is handled only when needed.
 
 // ============================================================
 //  HANDLERS
@@ -1210,14 +1214,6 @@ function addHandlers(){
                 const a = MULT.slice(0, autobetCfg[id].maxLvl).map(m => v * m);
                 return send(id, "✅ Base Bet Updated: ₹" + v + "\nMartingale: ₹" + a.join("→₹"), {reply_markup: autobetMenu});
             }
-            else if(s.action === "setlvl"){
-                const v = parseInt(text);
-                if(isNaN(v) || v < 1 || v > 10) return send(id, "❌ Invalid Level! Enter 1-10.");
-                autobetCfg[id].maxLvl = v;
-                delete userAction[id];
-                const a = MULT.slice(0, v).map(m => autobetCfg[id].baseBet * m);
-                return send(id, "✅ Max Level Updated: L" + v + "\nMartingale: ₹" + a.join("→₹"), {reply_markup: autobetMenu});
-            }
             else if(s.action === "setwloss"){
                 const v = parseInt(text);
                 if(isNaN(v) || v < 0) return send(id, "❌ Invalid Number!");
@@ -1232,6 +1228,13 @@ function addHandlers(){
                 autobetCfg[id].maxLvl = vals.length;
                 delete userAction[id];
                 return send(id, "✅ Custom Bets Updated!\nLevels: " + vals.length + "\nSequence: ₹" + vals.join(" → ₹"), {reply_markup: autobetMenu});
+            }
+            else if(s.action === "setbalance"){
+                const v = parseFloat(text);
+                if(isNaN(v) || v < 0) return send(id, "❌ Invalid balance! Enter a valid amount.");
+                autobetCfg[id].balance = v;
+                delete userAction[id];
+                return send(id, "✅ Balance Updated: ₹" + v.toFixed(2), {reply_markup: autobetMenu});
             }
         }
 
@@ -1252,7 +1255,7 @@ function addHandlers(){
         if(text==="🤖 AutoBet Setup"){
             if(!hasAccess(id))return send(id,"❌ No access.");
             const cfg=autobetCfg[id],creds=userCreds[id]||{};
-            const amounts=MULT.slice(0,cfg.maxLvl).map(m=>cfg.baseBet*m);
+           const amounts = Array.isArray(cfg.customBets) && cfg.customBets.length ? cfg.customBets : MULT.slice(0,cfg.maxLvl).map(m => (cfg.baseBet || 1) * m);
             return send(id,
 "🤖 AUTOBET SETTINGS\n\n"+
 "Status   : "+(cfg.enabled?"✅ ON":"❌ OFF")+"\n"+
@@ -1260,13 +1263,12 @@ function addHandlers(){
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌ /setcreds")+"\n"+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+cfg.watchLoss+" consecutive\n"+
-"Base Bet : ₹"+cfg.baseBet+"\n"+
-"Max Level: "+cfg.maxLvl+"\n\n"+
-"Mart: ₹"+amounts.join("→₹")+"\n\n"+
+"Balance  : ₹"+ (Number(cfg.balance || 0)).toFixed(2) +"\n"+
+"Custom   : ₹"+amounts.join("→₹")+"\n\n"+
 "/setcreds 916381605525 PASSWORD\n"+
 "/setmytoken TOKEN",
-            {reply_markup:autobetMenu});
-        }
+           {reply_markup:autobetMenu});
+       }
 
         if(text==="✅ Enable AutoBet"){
             const creds=userCreds[id]||{};
@@ -1287,11 +1289,11 @@ function addHandlers(){
         if(text==="👀 Watch Mode OFF"){autobetCfg[id].watch=false;return send(id,"👀 Watch OFF — Direct bet!");}
                         // --- CORRECTED SETTINGS HANDLERS ---
         if(text==="💰 Set Base Bet"){userAction[id]={action:"setbase"};return send(id,"Enter base bet amount (e.g. 1):");}
-        if(text==="📈 Set Max Level"){userAction[id]={action:"setlvl"};return send(id,"Enter max level (1-10):");}
                 // --- SETTINGS TRIGGERS ---
         if(text==="🎯 Set Profit Target"){userAction[id]={action:"settarget"};return send(id,"Enter target profit (Min ₹10):");}
         if(text==="⏳ Set Section Delay"){userAction[id]={action:"setdelay"};return send(id,"Enter restart delay in MINUTES (e.g. 30):");}
         if(text==="📝 Set Custom Bets"){userAction[id]={action:"setcustom"};return send(id,"📝 Enter Custom Bet Sequence (e.g. 1,4,7,9):");}
+        if(text==="💵 Set Balance"){userAction[id]={action:"setbalance"};return send(id,"Enter your balance amount (e.g. 5000):");}
 if(text==="🔢 Set Watch Losses"){
     userAction[id]={action:"setwloss"};
     return send(id,"Enter watch loss count (e.g. 3):");
