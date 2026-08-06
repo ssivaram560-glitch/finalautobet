@@ -566,7 +566,6 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     console.log("[BET FAIL] All retries exhausted.");
     return false;
 }
-
 // ============================================================
 // COMPLETE BOT LOGIC WITH WATCH LOSS, PATTERN SKIP, AND MODES
 // ============================================================
@@ -592,8 +591,15 @@ function initState(userId) {
             mode: "NORMAL", // "NORMAL" அல்லது "RECOVERY"
             pendingPrediction: true,
             skipCount: 0,
-            historyModes: [] // நாரமல் மற்றும் ரெக்கவரி ஹிஸ்டரி சேமிக்க (R மற்றும் N)
+            historyModes: [] // நார்மல் மற்றும் ரெக்கவரி ஹிஸ்டரி சேமிக்க (R மற்றும் N)
         };
+    } else {
+        if (!userStates[userId].historyModes) {
+            userStates[userId].historyModes = [];
+        }
+        if (userStates[userId].skipCount === undefined) {
+            userStates[userId].skipCount = 0;
+        }
     }
 }
 
@@ -890,7 +896,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         const win = predicted === actual;
         const betLevel = st.level;
 
-        // Pass win, actual, and betPlaced to handle modes, watch loss, and skip counts
         updateAfterResult(userId, win, actual, betPlaced);
 
         const s = stats[userId];
@@ -944,8 +949,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
-
-module.exports = { decidePrediction, updateAfterResult, getStatus, initState, runPredict, checkResult };
 
 // ============================================================
 //  STATS
