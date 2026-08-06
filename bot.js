@@ -568,391 +568,115 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 }
 
 // ============================================================
-//  LOGIC (SAME / OPPOSITE MODE — 3 LEVEL)
+// 1. LOGIC (NORMAL / RECOVERY MODE — FIXED & SYNCED)
 // ============================================================
+let userStates = {};
 
-// ════════════════════════════════════════════════════════════════════
-//  INIT STATE — Safe
-// ════════════════════════════════════════════════════════════════════
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            resultHistory: [],   // actual B/S results (oldest first)
-            skipCount: 0,        // predictions to skip after L3 loss
-            currentMode: null,   // "SAME" or "OPPOSITE"
-            lastPrediction: null
+            mode: "NORMAL", // "NORMAL" அல்லது "RECOVERY"
+            pendingPrediction: true
         };
-    }
-    if (!Array.isArray(userStates[userId].resultHistory)) {
-        userStates[userId].resultHistory = [];
-    }
-    if (typeof userStates[userId].skipCount !== "number") {
-        userStates[userId].skipCount = 0;
     }
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  BUILD B/S FROM API LIST (oldest first)
-// ════════════════════════════════════════════════════════════════════
-function buildBSFromList(list, count) {
-    const recent = list.slice(0, Math.min(count, list.length));
-    const seq = [];
-    for (const item of recent) {
-        const n = parseInt(item.number || item.winNumber || 0);
-        if (!isNaN(n)) {
-            seq.push(n >= 5 ? "B" : "S");
-        }
-    }
-    return seq.reverse(); // Returns oldest to newest
-}
-
-function buildNumberList(list, count) {
-    const recent = list.slice(0, Math.min(count, list.length));
-    const nums = [];
-    for (const item of recent) {
-        const n = parseInt(item.number || item.winNumber || 0);
-        if (!isNaN(n)) nums.push(n);
-    }
-    return nums;
-}
-
-function classifyNumber(number) {
-    if (number >= 0 && number <= 4) return 'Small';
-    if (number >= 5 && number <= 9) return 'Big';
-    return 'Invalid';
-}
-
-class ResultAnalyzer {
-    constructor() {
-        this.results = [];
-        this.analysis = null;
-        this.prediction = null;
+function decidePrediction(list, currentLevel, userId) {
+    if (!list || list.length < 2) {
+        return null;
     }
 
-    setResults(results) {
-        if (!Array.isArray(results) || results.length < 10) {
-            console.error('❌ Need at least 10 results');
-            return false;
-        }
+    initState(userId);
+    const state = userStates[userId];
 
-        this.results = results.slice(0, 10);
-        this.analyze();
-        this.predict();
-        return true;
+    const currentPeriod = String(list[0].issueNumber);
+    const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
+
+    // STEP 1: Calculate next period
+    const nextPeriodNum = BigInt(currentPeriod) + 1n;
+    const nextPeriod = nextPeriodNum.toString();
+    const nextLast3Num = parseInt(nextPeriod.slice(-3));
+
+    // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
+    const answer = nextLast3Num * Math.exp(currentResult);
+
+    // STEP 3: Get 14 digits (remove decimal, take first 14)
+    const answerStr = answer.toString();
+    const noDecimal = answerStr.replace('.', '');
+    const first14 = noDecimal.substring(0, 14);
+
+    // STEP 4: Get last digit
+    const lastDigit = parseInt(first14.charAt(first14.length - 1));
+
+    const normalPrediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
+    const recoveryPrediction = lastDigit <= 4 ? 'BIG' : 'SMALL';
+
+    let prediction;
+    if (state.mode === "RECOVERY") {
+        prediction = recoveryPrediction;
+    } else {
+        prediction = normalPrediction;
     }
-
-    getCategoryDetails(number) {
-        const category = this.classifyNumber(number);
-        const icon = category === 'Small' ? '⬇️' : '⬆️';
-        const range = category === 'Small' ? '0-4' : '5-9';
-        const color = category === 'Small' ? '#4ECDC4' : '#FF6B6B';
-        return { category, icon, range, color };
-    }
-
-    classifyNumber(number) {
-        return classifyNumber(number);
-    }
-
-    appearsInArray(value, array) {
-        return array.includes(value);
-    }
-
-    detectDoubleViolet(sequence) {
-        const positions = [];
-        for (let i = 0; i < sequence.length - 1; i++) {
-            if ((sequence[i] === 0 && sequence[i + 1] === 0) ||
-                (sequence[i] === 5 && sequence[i + 1] === 5)) {
-                positions.push({
-                    number: sequence[i],
-                    position: i,
-                    next: sequence[i + 1]
-                });
-            }
-        }
-        return {
-            found: positions.length > 0,
-            positions,
-            count: positions.length
-        };
-    }
-
-    analyze() {
-        if (!this.results || this.results.length === 0) {
-            console.error('❌ No results to analyze');
-            return;
-        }
-
-        const current = this.results[0];
-        const previous9 = this.results.slice(1);
-        const appearedBefore = this.appearsInArray(current, previous9);
-        const doubleViolet = this.detectDoubleViolet(this.results);
-
-        const frequency = {};
-        const categories = {};
-        let bigCount = 0;
-        let smallCount = 0;
-
-        this.results.forEach((num) => {
-            frequency[num] = (frequency[num] || 0) + 1;
-            const category = this.classifyNumber(num);
-            categories[num] = category;
-            if (category === 'Big') bigCount++;
-            else if (category === 'Small') smallCount++;
-        });
-
-        const patterns = this.detectPatterns(this.results);
-
-        this.analysis = {
-            current: {
-                value: current,
-                category: this.classifyNumber(current),
-                details: this.getCategoryDetails(current),
-                appearedBefore: appearedBefore,
-                timesAppeared: frequency[current] || 0
-            },
-            previous9,
-            doubleViolet,
-            frequency,
-            categories,
-            statistics: {
-                total: this.results.length,
-                big: bigCount,
-                small: smallCount,
-                bigPercentage: ((bigCount / this.results.length) * 100).toFixed(1),
-                smallPercentage: ((smallCount / this.results.length) * 100).toFixed(1)
-            },
-            patterns,
-            allResults: this.results
-        };
-    }
-
-    detectPatterns(sequence) {
-        const patterns = {
-            consecutive: [],
-            repeating: [],
-            alternating: false,
-            increasing: false,
-            decreasing: false
-        };
-
-        for (let i = 0; i < sequence.length - 1; i++) {
-            if (Math.abs(sequence[i] - sequence[i + 1]) === 1) {
-                patterns.consecutive.push({
-                    pair: [sequence[i], sequence[i + 1]],
-                    position: i
-                });
-            }
-        }
-
-        for (let i = 0; i < sequence.length - 2; i++) {
-            if (sequence[i] === sequence[i + 1] && sequence[i] === sequence[i + 2]) {
-                patterns.repeating.push({
-                    number: sequence[i],
-                    position: i,
-                    count: 3
-                });
-            }
-        }
-
-        let alternatingCount = 0;
-        for (let i = 0; i < sequence.length - 1; i++) {
-            const cat1 = this.classifyNumber(sequence[i]);
-            const cat2 = this.classifyNumber(sequence[i + 1]);
-            if (cat1 !== cat2) alternatingCount++;
-        }
-        patterns.alternating = alternatingCount >= sequence.length - 2;
-
-        let increasing = true;
-        let decreasing = true;
-        for (let i = 0; i < sequence.length - 1; i++) {
-            if (sequence[i] >= sequence[i + 1]) decreasing = false;
-            if (sequence[i] <= sequence[i + 1]) increasing = false;
-        }
-        patterns.increasing = increasing;
-        patterns.decreasing = decreasing;
-
-        return patterns;
-    }
-
-    predict() {
-        if (!this.analysis) {
-            console.error('❌ Please run analysis first');
-            return;
-        }
-
-        const current = this.analysis.current;
-        const appearedBefore = current.appearedBefore;
-        const doubleViolet = this.analysis.doubleViolet;
-        const stats = this.analysis.statistics;
-        const patterns = this.analysis.patterns;
-
-        const oppositeCategory = current.category === 'Big' ? 'Small' : 'Big';
-
-        let prediction = {
-            strategy: '',
-            confidence: 0,
-            recommendedNumbers: [],
-            reasoning: []
-        };
-
-        if (appearedBefore) {
-            prediction.strategy = 'Current appeared before - predicting opposite';
-            prediction.reasoning.push(`Number ${current.value} appeared ${current.timesAppeared} times in last 10 results`);
-            prediction.reasoning.push('Historical pattern suggests opposition');
-            prediction.confidence = 65;
-        } else {
-            prediction.strategy = 'New number - predicting opposite for diversification';
-            prediction.reasoning.push(`Number ${current.value} is new in recent history`);
-            prediction.confidence = 60;
-        }
-
-        if (doubleViolet.found) {
-            prediction.reasoning.push(`⚠️ DOUBLE VIOLET DETECTED! ${doubleViolet.count} occurrence(s)`);
-            doubleViolet.positions.forEach(pos => {
-                prediction.reasoning.push(`  Position ${pos.position + 1}: ${pos.number}${pos.number}`);
-            });
-            prediction.confidence += 10;
-        }
-
-        if (patterns.alternating) {
-            prediction.reasoning.push('🔄 Alternating pattern detected');
-            prediction.confidence += 5;
-        }
-
-        if (patterns.consecutive.length > 0) {
-            prediction.reasoning.push(`📈 ${patterns.consecutive.length} consecutive pairs found`);
-            prediction.confidence += 5;
-        }
-
-        const dominantCategory = stats.big > stats.small ? 'Big' : 'Small';
-        if (dominantCategory === oppositeCategory) {
-            prediction.reasoning.push(`📊 ${oppositeCategory} is currently dominant in history`);
-            prediction.confidence += 5;
-        }
-
-        const numberScores = {};
-        for (let i = 0; i <= 9; i++) {
-            const category = this.classifyNumber(i);
-            const frequency = this.analysis.frequency[i] || 0;
-            const isOpposite = category === oppositeCategory;
-            let score = isOpposite ? 10 : 0;
-            score += (10 - frequency * 2);
-            score += Math.random() * 2;
-            numberScores[i] = score;
-        }
-
-        const sortedNumbers = Object.entries(numberScores)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(entry => parseInt(entry[0]));
-
-        prediction.recommendedNumbers = sortedNumbers;
-        prediction.confidence = Math.min(100, Math.round(prediction.confidence));
-
-        this.prediction = prediction;
-    }
-}
-
-function decidePrediction(list) {
-    if (!list || list.length < 10) return null;
-
-    const numbers = buildNumberList(list, 10);
-    if (numbers.length < 10) return null;
-
-    const analyzer = new ResultAnalyzer();
-    if (!analyzer.setResults(numbers)) return null;
-
-    const currentCategory = analyzer.analysis.current.category;
-    const predictionValue = currentCategory === 'Big' ? 'SMALL' : 'BIG';
-    const history = numbers.slice(0, 4).map(n => n >= 5 ? 'B' : 'S').join('');
 
     return {
-        type: 'SIZE',
-        val: predictionValue,
-        mode: currentCategory,
-        history: history,
-        analysis: analyzer.analysis,
-        predictionDetails: analyzer.prediction
+        type: "SIZE",
+        val: prediction,
+        conf: 85,
+        pat: state.mode // UI-ல் காட்டுவதற்காக
     };
 }
 
-
-// 1. updateAfterResult - Corrected Level Management
-function updateAfterResult(userId, wasWin, actualSize, betPlaced) {
+// Fixed updateAfterResult to handle Martingale levels and Mode switching properly
+function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
-    const st = autobetState[userId];
-    const cfg = autobetCfg[userId];
+    
+    // Check if autobetState exists and is initialized
+    if (typeof autobetState !== 'undefined' && autobetState[userId]) {
+        const st = autobetState[userId];
+        const cfg = autobetCfg[userId];
 
-    const bs = (actualSize === "BIG" || actualSize === "B") ? "B" : "S";
-    state.resultHistory.push(bs);
-    if (state.resultHistory.length > 20) state.resultHistory.shift();
-
-    if (!betPlaced) {
-        // No bet was placed: do not change the current martingale level.
-        // Watch mode still tracks prediction losses until the trigger condition is met.
-        if (cfg.watch) {
+        if (betPlaced) {
             if (wasWin) {
+                // Win ஆனதும் Level 1-க்கு வந்துவிடும், மோட் மாறாது (NORMAL-லேயே இருக்கும்)
+                st.level = 1;
                 st.consecutiveLoss = 0;
-                st.level = 1; // Reset level on watch win
             } else {
+                // Loss ஆனதும் அடுத்த லெவலுக்கு Martingale போகும்
                 st.consecutiveLoss++;
-                if (st.consecutiveLoss >= cfg.watchLoss) { // If watchLoss is 2, then after 2 losses, start betting
-                    st.inMart = true;
-                    st.level = 1; // Start from level 1 after watch losses
+                st.level++;
+                
+                // Max level தாண்டினால் L1-க்கு Reset ஆகும்
+                if (st.level > cfg.maxLvl) {
+                    st.level = 1;
+                    st.consecutiveLoss = 0;
                 }
             }
         }
-        return;
     }
 
+    // Prediction Mode Switching Logic (Win = Same Mode, Loss = Switch Mode)
     if (wasWin) {
-        // Reset everything on a winning bet
-        st.consecutiveLoss = 0;
-        st.level = 1;
-        st.inMart = false;
+        // Win ஆன அதே மோடில் தொடரும் (NORMAL என்றால் NORMAL, RECOVERY என்றால் RECOVERY)
     } else {
-        st.consecutiveLoss++;
-        st.inMart = true;
-        st.level++;
-
-        // Check for Max Level
-        if (st.level > cfg.maxLvl) {
-            st.level = 1;
-            st.consecutiveLoss = 0;
-            st.inMart = false;
-        }
-
-        // Loss-streak skip rules
-        if (st.consecutiveLoss === 3 || st.consecutiveLoss === 5 || st.consecutiveLoss === 7) {
-            state.skipCount = Math.max(state.skipCount, 5);
-            console.log(`[USER ${userId}] ${st.consecutiveLoss} losses -> skip next 5 predictions.`);
-        }
-
-        // --- L4 ENTRY CHECK (Safety) ---
-        // Only check patterns when entering Level 4 (after L3 loss)
-        if (st.level === 4) {
-            const last4 = state.resultHistory.slice(-4).join('');
-            const dangerousPatterns = ['SSBB', 'BBSS', 'SSSB', 'BBBS', 'SBBS', 'BSSB'];
-            if (dangerousPatterns.includes(last4)) {
-                state.skipCount = Math.max(state.skipCount, 4);
-                console.log(`[USER ${userId}] Dangerous Pattern ${last4} at L4 Entry -> Skipping 4.`);
-            }
+        // Loss ஆனதும் மோட் மாறும் (NORMAL <-> RECOVERY)
+        if (state.mode === "NORMAL") {
+            state.mode = "RECOVERY";
+        } else {
+            state.mode = "NORMAL";
         }
     }
 }
-
 
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
-    const st = autobetState[userId];
-    let skipInfo = "";
-    if (state.skipCount > 0) skipInfo = ` | Skip: ${state.skipCount} remaining`;
-    return `${state.currentMode || 'SAME'} MODE | L${st ? st.level : 1}${skipInfo} | History: ${state.resultHistory.join('')}`;
+    return state.mode;
 }
 
+// ============================================================
 // 2. handleWin - UI & Stats
+// ============================================================
 async function handleWin(userId, chatId, actual, num, betLevel) {
     const pt = profitTrack[userId];
     const cfg = autobetCfg[userId];
@@ -980,7 +704,9 @@ async function handleWin(userId, chatId, actual, num, betLevel) {
     await sendSticker(chatId, WIN_STICKER);
 }
 
+// ============================================================
 // 3. handleLoss - UI & Stats
+// ============================================================
 async function handleLoss(userId, chatId, actual, num, betLevel) {
     const st = autobetState[userId];
     const pt = profitTrack[userId];
@@ -1019,8 +745,9 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     }
     await sendSticker(chatId, LOSS_STICKER);
 }
+
 // ============================================================
-//  PREDICT LOOP
+// PREDICT LOOP
 // ============================================================
 function parseItem(item) {
     const n = +(item.number || item.winNumber || 0);
@@ -1033,6 +760,7 @@ function parseItem(item) {
             n % 2 === 0 ? "RED" : "GREEN"
     };
 }
+
 function stk(arr, key) {
     let count = 1;
     let val = arr[0]?.[key];
@@ -1042,6 +770,7 @@ function stk(arr, key) {
     }
     return { val, count };
 }
+
 async function runPredict(userId, chatId) {
     if(!running[userId]) return;
     initUser(userId);
@@ -1067,7 +796,8 @@ async function runPredict(userId, chatId) {
     if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
     sentPeriods[userId].add(next);
 
-    const signal = decidePrediction(list);
+    // Pass list, level, and userId to decidePrediction correctly
+    const signal = decidePrediction(list, st.level, userId);
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
     let abLine = "🤖 AutoBet: OFF";
@@ -1084,7 +814,6 @@ async function runPredict(userId, chatId) {
         abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
         canBet = false;
     } else {
-        // Condition for betting met (either direct bet or watch condition satisfied)
         canBet = true;
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
@@ -1092,11 +821,11 @@ async function runPredict(userId, chatId) {
 
     await send(chatId,
 "╔══════════════════════════╗\n"+
-"║   👑 EARN WITH ME AI    ║\n"+
+"║    👑 EARN WITH ME AI    ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
-"║ Pattern : "+(signal.history || "N/A")+"\n"+
+"║ Pattern : "+(signal.pat || "N/A")+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
 "╚══════════════════════════╝",
@@ -1116,12 +845,10 @@ async function runPredict(userId, chatId) {
 
     checkResult(userId, chatId, next, signal.val, signal.type, betPlaced);
 }
-// ============================================================
-//  RESULT CHECKER
-// ============================================================
 
-
-// 4. checkResult - Robust Update & Full UI
+// ============================================================
+// RESULT CHECKER
+// ============================================================
 async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
     let tries = 0;
     const cfg = autobetCfg[userId];
@@ -1149,7 +876,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         const win = predicted === actual;
         const betLevel = st.level; // Save current level before update
 
-        // UPDATE LOGIC (Passing betPlaced to fix L1 repetition)
+        // UPDATE LOGIC (Passing actual and betPlaced properly)
         updateAfterResult(userId, win, actual, betPlaced);
 
         const s = stats[userId];
@@ -1163,11 +890,9 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         }
 
         if (betPlaced) {
-            // BET RESULT DASHBOARD
             if (win) await handleWin(userId, chatId, actual, num, betLevel);
             else await handleLoss(userId, chatId, actual, num, betLevel);
 
-            // Profit Check
             const targetProfit = Number(cfg.targetProfit) || 1000;
             if (pt.pnl >= targetProfit) {
                 st.isWaiting = true;
@@ -1175,7 +900,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
                 await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
             }
         } else {
-            // WATCH RESULT DASHBOARD (Full details as requested)
             if (win) {
                 await send(chatId, 
                     "╔══════════════════════════╗\n"+
@@ -1205,6 +929,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
     }, 10000);
 }
 
+module.exports = { decidePrediction, updateAfterResult, getStatus, initState, runPredict, checkResult };
 
 // ============================================================
 //  STATS
