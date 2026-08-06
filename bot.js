@@ -571,7 +571,23 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 // 1. LOGIC (NORMAL / RECOVERY MODE — FIXED & SYNCED)
 // ============================================================
 let userStates = {};
+// லிஸ்ட்டிலிருந்து கடைசி N ரிசல்ட்டுகளை BIG/SMALL ஆக மாற்றும் பங்க்ஷன்
+function buildBSFromList(list, count = 15) {
+    if (!list || !Array.isArray(list)) return [];
+    
+    // லிஸ்ட்டை ரிவர்ஸ் செய்து அல்லது தேவையான அளவுக்கு வெட்டி எடுக்கலாம்
+    const sliced = list.slice(0, count);
+    const resultHistory = [];
 
+    for (let i = sliced.length - 1; i >= 0; i--) {
+        const item = sliced[i];
+        const num = parseInt(item.number || item.winNumber || 0);
+        const size = num >= 5 ? "BIG" : "SMALL";
+        resultHistory.push(size);
+    }
+
+    return resultHistory;
+}
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
