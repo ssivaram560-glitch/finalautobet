@@ -568,14 +568,12 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 }
 
 // ============================================================
-// 1. LOGIC (NORMAL / RECOVERY MODE — FIXED & SYNCED)
+// COMPLETE BOT LOGIC WITH WATCH LOSS, PATTERN SKIP, AND MODES
 // ============================================================
 let userStates = {};
-// லிஸ்ட்டிலிருந்து கடைசி N ரிசல்ட்டுகளை BIG/SMALL ஆக மாற்றும் பங்க்ஷன்
+
 function buildBSFromList(list, count = 15) {
     if (!list || !Array.isArray(list)) return [];
-    
-    // லிஸ்ட்டை ரிவர்ஸ் செய்து அல்லது தேவையான அளவுக்கு வெட்டி எடுக்கலாம்
     const sliced = list.slice(0, count);
     const resultHistory = [];
 
@@ -585,14 +583,16 @@ function buildBSFromList(list, count = 15) {
         const size = num >= 5 ? "BIG" : "SMALL";
         resultHistory.push(size);
     }
-
     return resultHistory;
 }
+
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
             mode: "NORMAL", // "NORMAL" அல்லது "RECOVERY"
-            pendingPrediction: true
+            pendingPrediction: true,
+            skipCount: 0,
+            historyModes: [] // நாரமல் மற்றும் ரெக்கவரி ஹிஸ்டரி சேமிக்க (R மற்றும் N)
         };
     }
 }
@@ -608,20 +608,14 @@ function decidePrediction(list, currentLevel, userId) {
     const currentPeriod = String(list[0].issueNumber);
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
-    // STEP 1: Calculate next period
     const nextPeriodNum = BigInt(currentPeriod) + 1n;
     const nextPeriod = nextPeriodNum.toString();
     const nextLast3Num = parseInt(nextPeriod.slice(-3));
 
-    // STEP 2: Calculate: NEXT_LAST_3 × exp(CURRENT_RESULT)
     const answer = nextLast3Num * Math.exp(currentResult);
-
-    // STEP 3: Get 14 digits (remove decimal, take first 14)
     const answerStr = answer.toString();
     const noDecimal = answerStr.replace('.', '');
     const first14 = noDecimal.substring(0, 14);
-
-    // STEP 4: Get last digit
     const lastDigit = parseInt(first14.charAt(first14.length - 1));
 
     const normalPrediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
@@ -638,44 +632,60 @@ function decidePrediction(list, currentLevel, userId) {
         type: "SIZE",
         val: prediction,
         conf: 85,
-        pat: state.mode // UI-ல் காட்டுவதற்காக
+        pat: state.mode
     };
 }
 
-// Fixed updateAfterResult to handle Martingale levels and Mode switching properly
 function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
-    // Check if autobetState exists and is initialized
+    // 1. Regular Mode History tracking (N for Normal, R for Recovery/Loss pattern analysis)
+    const currentModeChar = state.mode === "NORMAL" ? "N" : "R";
+    state.historyModes.push(currentModeChar);
+    if (state.historyModes.length > 10) {
+        state.historyModes.shift();
+    }
+
+    // Pattern checking for Skip: "RNRN" அல்லது "NRNR" வந்து, தோற்றால் (Loss) 6 பீரியட் Skip செய்ய வேண்டும்
+    const patternStr = state.historyModes.join("");
+    if (!wasWin) {
+        if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
+            state.skipCount = 6; // 6 பீரியடுகள் ஸ்கிப் ஆகும்
+        }
+    }
+
+    // 2. Martingale Level & Consecutive Loss Update (Watch Loss & Bet Placed logic)
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
 
         if (betPlaced) {
             if (wasWin) {
-                // Win ஆனதும் Level 1-க்கு வந்துவிடும், மோட் மாறாது (NORMAL-லேயே இருக்கும்)
                 st.level = 1;
                 st.consecutiveLoss = 0;
             } else {
-                // Loss ஆனதும் அடுத்த லெவலுக்கு Martingale போகும்
                 st.consecutiveLoss++;
                 st.level++;
-                
-                // Max level தாண்டினால் L1-க்கு Reset ஆகும்
                 if (st.level > cfg.maxLvl) {
                     st.level = 1;
                     st.consecutiveLoss = 0;
                 }
             }
+        } else {
+            // Watch Mode-ல் இருக்கும்போதும் regular ஆக consecutiveLoss கணக்கிடப்பட வேண்டும்
+            if (wasWin) {
+                st.consecutiveLoss = 0;
+            } else {
+                st.consecutiveLoss++;
+            }
         }
     }
 
-    // Prediction Mode Switching Logic (Win = Same Mode, Loss = Switch Mode)
+    // 3. Mode Switching Logic
     if (wasWin) {
-        // Win ஆன அதே மோடில் தொடரும் (NORMAL என்றால் NORMAL, RECOVERY என்றால் RECOVERY)
+        // Win ஆன அதே மோடில் தொடரும்
     } else {
-        // Loss ஆனதும் மோட் மாறும் (NORMAL <-> RECOVERY)
         if (state.mode === "NORMAL") {
             state.mode = "RECOVERY";
         } else {
@@ -777,16 +787,6 @@ function parseItem(item) {
     };
 }
 
-function stk(arr, key) {
-    let count = 1;
-    let val = arr[0]?.[key];
-    for (let i = 1; i < arr.length; i++) {
-        if (arr[i][key] === val) count++;
-        else break;
-    }
-    return { val, count };
-}
-
 async function runPredict(userId, chatId) {
     if(!running[userId]) return;
     initUser(userId);
@@ -794,7 +794,6 @@ async function runPredict(userId, chatId) {
     const st = autobetState[userId];
     const cfg = autobetCfg[userId];
 
-    // Profit Target Check
     if (st.isWaiting) {
         if (Date.now() >= st.nextStartTime) {
             st.isWaiting = false;
@@ -812,7 +811,6 @@ async function runPredict(userId, chatId) {
     if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
     sentPeriods[userId].add(next);
 
-    // Pass list, level, and userId to decidePrediction correctly
     const signal = decidePrediction(list, st.level, userId);
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
@@ -890,9 +888,9 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         
         const win = predicted === actual;
-        const betLevel = st.level; // Save current level before update
+        const betLevel = st.level;
 
-        // UPDATE LOGIC (Passing actual and betPlaced properly)
+        // Pass win, actual, and betPlaced to handle modes, watch loss, and skip counts
         updateAfterResult(userId, win, actual, betPlaced);
 
         const s = stats[userId];
@@ -944,6 +942,8 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
     }, 10000);
 }
+
+module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, runPredict, checkResult };
 
