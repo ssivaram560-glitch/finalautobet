@@ -440,7 +440,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     const betMult   = cfg.customBets[level-1] || (cfg.baseBet * MULT[level-1]);
     let bc = "";
 
-    const maxRetries = 3; 
+    const maxRetries = 5; 
     const retryDelayMs = 2000; 
 
     if (predType === "SIZE")  bc = prediction === "BIG" ? "BigSmall_Big" : "BigSmall_Small";
@@ -713,7 +713,7 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     } 
 
-    // Martingale & Consecutive Loss Update
+    // 🔥 FIX: Bet Placed பண்ணியிருந்தா மட்டும் Martingale & Consecutive Loss கணக்கு போகணும்!
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -731,10 +731,13 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
                 }
             }
         } else {
-            if (wasWin) {
-                st.consecutiveLoss = 0;
-            } else {
-                st.consecutiveLoss++;
+            // 🛑 பெட் கட்டலை (Watch Mode-ல இருக்கு) ஆனா வாட்ச் லாஸ் கணக்கு மட்டும் ஏறும்
+            if (cfg && cfg.watch) {
+                if (wasWin) {
+                    st.consecutiveLoss = 0; // வாட்ச் மோட்ல ஜெயிட்டா ஜீரோ ஆகிரும் அல்லது நீ விரும்பினா வச்சுக்கலாம்
+                } else {
+                    st.consecutiveLoss++; // வாட்ச் மோட்ல லாஸ் ஆனா consecutiveLoss கூடும், அப்போதான் watchLoss limit-ஐ ரீச் பண்ணி பெட் ஸ்டார்ட் ஆகும்!
+                }
             }
         }
     }
@@ -754,7 +757,6 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 }
-
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
