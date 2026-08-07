@@ -7,7 +7,7 @@ const puppeteer   = require('puppeteer');
 // ============================================================
 //  CONFIG
 // ============================================================
-const BOT_TOKEN    ="8692459169:AAGEHdxw3VCVsP5afaSRVDAQSjcQo3Di0eM";
+const BOT_TOKEN    ="8692459169:AAErtwnYdbidRosbajL-1DGfZs3NzuoZsqg";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
@@ -570,6 +570,9 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 // ============================================================
 // COMPLETE BOT LOGIC WITH 4-PREDICTION PATTERN MODE EXTENSION & FIXES
 // ============================================================
+// ============================================================
+// COMPLETE BOT LOGIC WITH STRICT 4-CONSECUTIVE LOSS REQUIREMENT (NO WINS ALLOWED)
+// ============================================================
 let userStates = {};
 
 function buildBSFromList(list, count = 15) {
@@ -591,20 +594,22 @@ function initState(userId) {
         userStates[userId] = {
             mode: "NORMAL", 
             pendingPrediction: true,
-            forcedModeCount: 0,     
-            activeForcedMode: null, 
+            forcedModeQueue: [],    
             historyModes: [],
             periodCounter: 0,       
-            normalWinsIn10: 0,      
-            recoveryWinsIn10: 0     
+            normalWinsIn20: 0,      
+            recoveryWinsIn20: 0,
+            waitingFor4Loss: false, // பேட்டர்ன் வந்ததும் 4 லாஸ்க்காக காத்திருக்க
+            consecutiveLossCount: 0 // நடுவுல வின் வருதான்னு செக் செய்ய
         };
     } else {
         if (!userStates[userId].historyModes) userStates[userId].historyModes = [];
-        if (userStates[userId].forcedModeCount === undefined) userStates[userId].forcedModeCount = 0;
-        if (userStates[userId].activeForcedMode === undefined) userStates[userId].activeForcedMode = null;
+        if (!userStates[userId].forcedModeQueue) userStates[userId].forcedModeQueue = [];
         if (userStates[userId].periodCounter === undefined) userStates[userId].periodCounter = 0;
-        if (userStates[userId].normalWinsIn10 === undefined) userStates[userId].normalWinsIn10 = 0;
-        if (userStates[userId].recoveryWinsIn10 === undefined) userStates[userId].recoveryWinsIn10 = 0;
+        if (userStates[userId].normalWinsIn20 === undefined) userStates[userId].normalWinsIn20 = 0;
+        if (userStates[userId].recoveryWinsIn20 === undefined) userStates[userId].recoveryWinsIn20 = 0;
+        if (userStates[userId].waitingFor4Loss === undefined) userStates[userId].waitingFor4Loss = false;
+        if (userStates[userId].consecutiveLossCount === undefined) userStates[userId].consecutiveLossCount = 0;
     }
 }
 
@@ -616,25 +621,24 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    if (state.forcedModeCount > 0 && state.activeForcedMode) {
-        state.mode = state.activeForcedMode;
+    let prediction;
+    let effectiveMode = state.mode;
+
+    if (state.forcedModeQueue && state.forcedModeQueue.length > 0) {
+        const nextChar = state.forcedModeQueue[0];
+        effectiveMode = (nextChar === "R") ? "RECOVERY" : "NORMAL";
     } else {
-        if (state.periodCounter >= 10) {
-            if (state.recoveryWinsIn10 > state.normalWinsIn10) {
+        if (state.periodCounter >= 20) {
+            if (state.recoveryWinsIn20 > state.normalWinsIn20) {
                 state.mode = "RECOVERY";
-            } else if (state.normalWinsIn10 > state.recoveryWinsIn10) {
+            } else if (state.normalWinsIn20 > state.recoveryWinsIn20) {
                 state.mode = "NORMAL";
             }
             state.periodCounter = 0;
-            state.normalWinsIn10 = 0;
-            state.recoveryWinsIn10 = 0;
+            state.normalWinsIn20 = 0;
+            state.recoveryWinsIn20 = 0;
         }
-    }
-
-    const currentModeChar = state.mode === "NORMAL" ? "N" : "R";
-    state.historyModes.push(currentModeChar);
-    if (state.historyModes.length > 10) {
-        state.historyModes.shift();
+        effectiveMode = state.mode;
     }
 
     const currentPeriod = String(list[0].issueNumber);
@@ -653,18 +657,23 @@ function decidePrediction(list, currentLevel, userId) {
     const normalPrediction = lastDigit <= 4 ? 'SMALL' : 'BIG';
     const recoveryPrediction = lastDigit <= 4 ? 'BIG' : 'SMALL';
 
-    let prediction;
-    if (state.mode === "RECOVERY") {
+    if (effectiveMode === "RECOVERY") {
         prediction = recoveryPrediction;
     } else {
         prediction = normalPrediction;
+    }
+
+    const currentModeChar = effectiveMode === "NORMAL" ? "N" : "R";
+    state.historyModes.push(currentModeChar);
+    if (state.historyModes.length > 20) {
+        state.historyModes.shift();
     }
 
     return {
         type: "SIZE",
         val: prediction,
         conf: 85,
-        pat: state.mode + (state.forcedModeCount > 0 ? ` (F:${state.forcedModeCount})` : "")
+        pat: effectiveMode + (state.forcedModeQueue.length > 0 ? ` (Q:${state.forcedModeQueue.length})` : "")
     };
 }
 
@@ -674,30 +683,55 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     
     state.periodCounter++;
 
+    const currentActiveMode = (state.historyModes.length > 0) ? state.historyModes[state.historyModes.length - 1] : (state.mode === "NORMAL" ? "N" : "R");
     if (wasWin) {
-        if (state.mode === "NORMAL") {
-            state.normalWinsIn10++;
+        if (currentActiveMode === "N") {
+            state.normalWinsIn20++;
         } else {
-            state.recoveryWinsIn10++;
+            state.recoveryWinsIn20++;
         }
     }
 
-    if (state.forcedModeCount > 0) {
-        state.forcedModeCount--;
+    // 1. அல்ட்ரா மோட் கியூவில் இருந்தால் இயங்கும்
+    if (state.forcedModeQueue && state.forcedModeQueue.length > 0) {
         if (wasWin) {
-            state.forcedModeCount = 0;
-            state.activeForcedMode = null;
-        } else if (state.forcedModeCount === 0) {
-            state.activeForcedMode = null;
+            // நடுவுல வின் வந்தா உடனே கியூ கட் ஆகிடும்
+            state.forcedModeQueue = [];
+        } else {
+            state.forcedModeQueue.shift(); 
+        }
+    } 
+    // 2. பேட்டர்ன் முடிந்து 4 லாஸ்களுக்காக காத்திருக்கும் நிலை
+    else if (state.waitingFor4Loss) {
+        if (wasWin) {
+            // நடுவுல ஒரு வின் வந்தாலும் இந்த ரூல் டோட்டலா கேன்சல்! அல்ட்ரா மோட் வராது.
+            state.waitingFor4Loss = false;
+            state.consecutiveLossCount = 0;
+        } else {
+            state.consecutiveLossCount++;
+            if (state.consecutiveLossCount >= 4) {
+                // கரெக்டா 4-ம் தொடர்ந்து லாஸ் ஆயிடுச்சு! இப்போ அல்ட்ரா மோட் ஸ்டார்ட் ஆகும்.
+                const patternStr = state.historyModes.join("");
+                if (patternStr.includes("NRNR")) {
+                    state.forcedModeQueue = ["R", "N", "R", "N"];
+                } else if (patternStr.includes("RNRN")) {
+                    state.forcedModeQueue = ["N", "R", "N", "R"];
+                }
+                state.waitingFor4Loss = false;
+                state.consecutiveLossCount = 0;
+            }
+        }
+    } 
+    // 3. புதிய NRNR அல்லது RNRN பேட்டர்னை செக் செய்தல்
+    else {
+        const patternStr = state.historyModes.join("");
+        if (patternStr.endsWith("NRNR") || patternStr.endsWith("RNRN")) {
+            state.waitingFor4Loss = true;
+            state.consecutiveLossCount = 0;
         }
     }
 
-    const patternStr = state.historyModes.join("");
-    if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
-        state.activeForcedMode = state.mode; 
-        state.forcedModeCount = 4;           
-    }
-
+    // Martingale & Consecutive Loss Update
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -723,14 +757,16 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    if (state.forcedModeCount === 0) {
+    if (!state.forcedModeQueue || state.forcedModeQueue.length === 0) {
         if (wasWin) {
             // Same mode
         } else {
-            if (state.mode === "NORMAL") {
-                state.mode = "RECOVERY";
-            } else {
-                state.mode = "NORMAL";
+            if (!state.waitingFor4Loss) {
+                if (state.mode === "NORMAL") {
+                    state.mode = "RECOVERY";
+                } else {
+                    state.mode = "NORMAL";
+                }
             }
         }
     }
@@ -872,7 +908,6 @@ async function runPredict(userId, chatId) {
     }
 
     const patternName = signal && signal.pat ? signal.pat : (state && state.mode ? state.mode : "NORMAL");
-    const delayMins = cfg && cfg.restartDelay ? cfg.restartDelay : 1;
     const waitLine = (cfg && cfg.watch && st.consecutiveLoss < cfg.watchLoss) ? "\nWatch Loss: " + st.consecutiveLoss + "/" + cfg.watchLoss : "";
 
     await send(chatId,
@@ -884,7 +919,6 @@ async function runPredict(userId, chatId) {
 "║ Pattern : "+patternName+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
-"║ Section Delay: "+delayMins+" mins\n"+ 
 waitLine+"\n"+
 "╚══════════════════════════╝",
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
@@ -987,7 +1021,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
-// ============================================================
 function showStats(chatId,userId){
     const d=stats[userId],rate=d.total?((d.win/d.total)*100).toFixed(1):"0.0";
     const bar="🟦".repeat(d.total?Math.round(d.win/d.total*10):0)+"⬜".repeat(d.total?10-Math.round(d.win/d.total*10):10);
