@@ -569,6 +569,8 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 // ============================================================
 // COMPLETE BOT LOGIC WITH WATCH LOSS, PATTERN SKIP, AND MODES
 // ============================================================
+// COMPLETE BOT LOGIC WITH 10-PERIOD WIN-BASED MODE SWITCHER
+// ============================================================
 let userStates = {};
 
 function buildBSFromList(list, count = 15) {
@@ -588,18 +590,20 @@ function buildBSFromList(list, count = 15) {
 function initState(userId) {
     if (!userStates[userId]) {
         userStates[userId] = {
-            mode: "NORMAL", // "NORMAL" அல்லது "RECOVERY"
+            mode: "NORMAL", 
             pendingPrediction: true,
             skipCount: 0,
-            historyModes: [] // நார்மல் மற்றும் ரெக்கவரி ஹிஸ்டரி சேமிக்க (R மற்றும் N)
+            historyModes: [],
+            periodCounter: 0,       // 10 பீரியடுகளைக் கணக்கிட
+            normalWinsIn10: 0,      // கடந்த 10 பீரியட்டில் நார்மல் வின்ஸ்
+            recoveryWinsIn10: 0     // கடந்த 10 பீரியட்டில் ரெக்கவரி வின்ஸ்
         };
     } else {
-        if (!userStates[userId].historyModes) {
-            userStates[userId].historyModes = [];
-        }
-        if (userStates[userId].skipCount === undefined) {
-            userStates[userId].skipCount = 0;
-        }
+        if (!userStates[userId].historyModes) userStates[userId].historyModes = [];
+        if (userStates[userId].skipCount === undefined) userStates[userId].skipCount = 0;
+        if (userStates[userId].periodCounter === undefined) userStates[userId].periodCounter = 0;
+        if (userStates[userId].normalWinsIn10 === undefined) userStates[userId].normalWinsIn10 = 0;
+        if (userStates[userId].recoveryWinsIn10 === undefined) userStates[userId].recoveryWinsIn10 = 0;
     }
 }
 
@@ -611,7 +615,19 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    // ஒவ்வொரு முறையும் பிரிடிக்ஷன் எடுக்கும்போதே தற்போதைய மோடை ஹிஸ்டரியில் பதிவிடுகிறோம் (Pattern Tracking)
+    // ஒவ்வொரு 10 பீரியடு முடிந்ததும், எந்த மோட் அதிக வின் எடுத்ததோ அதை 11-வது பீரியடுக்கு செட் பண்றோம்
+    if (state.periodCounter >= 10) {
+        if (state.recoveryWinsIn10 > state.normalWinsIn10) {
+            state.mode = "RECOVERY";
+        } else if (state.normalWinsIn10 > state.recoveryWinsIn10) {
+            state.mode = "NORMAL";
+        }
+        // சமமாக இருந்தால் (Tie) லாஸ்ட் மோடே தொடரும், கவுண்டரை ரீசெட் பண்றோம்
+        state.periodCounter = 0;
+        state.normalWinsIn10 = 0;
+        state.recoveryWinsIn10 = 0;
+    }
+
     const currentModeChar = state.mode === "NORMAL" ? "N" : "R";
     state.historyModes.push(currentModeChar);
     if (state.historyModes.length > 10) {
@@ -653,15 +669,27 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
-    // Pattern checking for Skip: "RNRN" அல்லது "NRNR" வந்து, தோற்றால் (Loss) 6 பீரியட் Skip செய்ய வேண்டும்
-    const patternStr = state.historyModes.join("");
-    if (!wasWin) {
-        if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
-            state.skipCount = 6; // 6 பீரியடுகள் ஸ்கிப் ஆகும்
+    // பீரியட் கவுண்டரை இன்கிரிமென்ட் பண்றோம் (10 பீரியட் கணக்கிட)
+    state.periodCounter++;
+
+    // எந்த மோடில் வின் அல்லது லாஸ் ஆனது என்பதை அந்தந்த 10 பீரியட் கவுண்டரில் சேமிக்கிறோம்
+    if (wasWin) {
+        if (state.mode === "NORMAL") {
+            state.normalWinsIn10++;
+        } else {
+            state.recoveryWinsIn10++;
         }
     }
 
-    // Martingale Level & Consecutive Loss Update (Watch Loss & Bet Placed logic)
+    // Pattern checking for Skip: "RNRN" அல்லது "NRNR" வந்து, தோற்றால் (Loss) 6 பீரியட் Skip
+    const patternStr = state.historyModes.join("");
+    if (!wasWin) {
+        if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
+            state.skipCount = 6;
+        }
+    }
+
+    // Martingale Level & Consecutive Loss Update
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -687,9 +715,10 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // Mode Switching Logic
+    // Mode Switching Logic: 
+    // Win ஆனா அதே மோட்ல இருக்கும், Loss ஆனா மட்டும் மாறும்.
     if (wasWin) {
-        // Win ஆன அதே மோடில் தொடரும்
+        // Same mode will continue for the next period unless 10-period rule overrides it
     } else {
         if (state.mode === "NORMAL") {
             state.mode = "RECOVERY";
