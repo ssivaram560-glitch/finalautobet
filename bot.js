@@ -599,7 +599,8 @@ function initState(userId) {
             periodCounter: 0,        
             normalWinsIn20: 0,       
             recoveryWinsIn20: 0,
-            lastPredictionWasLoss: false
+            lastPredictionWasLoss: false,
+            consecutivePatternLoss: 0 // 🔥 தொடர்ந்து வரும் லாஸை கணக்கிட
         };
     } else {
         if (!userStates[userId].historyModes) userStates[userId].historyModes = [];
@@ -608,6 +609,7 @@ function initState(userId) {
         if (userStates[userId].normalWinsIn20 === undefined) userStates[userId].normalWinsIn20 = 0;
         if (userStates[userId].recoveryWinsIn20 === undefined) userStates[userId].recoveryWinsIn20 = 0;
         if (userStates[userId].lastPredictionWasLoss === undefined) userStates[userId].lastPredictionWasLoss = false;
+        if (userStates[userId].consecutivePatternLoss === undefined) userStates[userId].consecutivePatternLoss = 0;
     }
 }
 
@@ -622,16 +624,23 @@ function decidePrediction(list, currentLevel, userId) {
     let prediction;
     let effectiveMode = state.mode;
 
-    // NRNR அல்லது RNRN பேட்டர்ன் செக் செய்து லாஸ் ஆனதா என்று பார்ப்பது
     const patternStr = state.historyModes.join("");
-    if (state.lastPredictionWasLoss) {
-        if (patternStr.endsWith("NRNR")) {
-            effectiveMode = "RECOVERY"; // NRNR லாஸ் ஆனா R-க்கு மாறும்
-            state.mode = "RECOVERY";
-        } else if (patternStr.endsWith("RNRN")) {
-            effectiveMode = "NORMAL";   // RNRN லாஸ் ஆனா N-க்கு மாறும்
-            state.mode = "NORMAL";
-        }
+
+    // 🔥 தொடர்ந்து 4 லாஸ் வந்தால் பேட்டர்ன் Close ஆகி மோட் மாறும்
+    if (state.consecutivePatternLoss >= 4) {
+        effectiveMode = (state.mode === "NORMAL") ? "RECOVERY" : "NORMAL";
+        state.mode = effectiveMode;
+        state.consecutivePatternLoss = 0; // ரீசெட் பண்றோம்
+        state.historyModes = []; // ஹிஸ்டரியை கிளியர் பண்றோம்
+    } else if (patternStr.endsWith("NRNR")) {
+        effectiveMode = "RECOVERY"; 
+        state.mode = "RECOVERY";
+    } else if (patternStr.endsWith("RNRN")) {
+        effectiveMode = "NORMAL";   
+        state.mode = "NORMAL";
+    } else if (state.lastPredictionWasLoss) {
+        effectiveMode = (state.mode === "NORMAL") ? "RECOVERY" : "NORMAL";
+        state.mode = effectiveMode;
     }
 
     if (state.forcedModeQueue && state.forcedModeQueue.length > 0) {
@@ -674,9 +683,12 @@ function decidePrediction(list, currentLevel, userId) {
     }
 
     const currentModeChar = effectiveMode === "NORMAL" ? "N" : "R";
-    state.historyModes.push(currentModeChar);
-    if (state.historyModes.length > 20) {
-        state.historyModes.shift();
+    
+    if (state.historyModes[state.historyModes.length - 1] !== currentModeChar) {
+        state.historyModes.push(currentModeChar);
+        if (state.historyModes.length > 20) {
+            state.historyModes.shift();
+        }
     }
 
     return {
@@ -691,17 +703,31 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
-    // லாஸ் ஆனா இல்லையானு ஸ்டோர் செய்து வைக்கிறோம்
     state.lastPredictionWasLoss = !wasWin;
-
     state.periodCounter++;
 
     const currentActiveMode = (state.historyModes.length > 0) ? state.historyModes[state.historyModes.length - 1] : (state.mode === "NORMAL" ? "N" : "R");
+    
     if (wasWin) {
+        state.consecutivePatternLoss = 0; // ஜெயிச்சிட்டா லாஸ் கவுண்ட் ஜீரோ ஆயிரும்
         if (currentActiveMode === "N") {
             state.normalWinsIn20++;
         } else {
             state.recoveryWinsIn20++;
+        }
+    } else {
+        // 🔥 லாஸ் ஆனா consecutivePatternLoss கூடும்
+        state.consecutivePatternLoss++;
+
+        if (state.mode === "NORMAL") {
+            state.mode = "RECOVERY";
+            state.historyModes.push("R");
+        } else {
+            state.mode = "NORMAL";
+            state.historyModes.push("N");
+        }
+        if (state.historyModes.length > 20) {
+            state.historyModes.shift();
         }
     }
 
@@ -713,7 +739,6 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     } 
 
-    // 🔥 FIX: Bet Placed பண்ணியிருந்தா மட்டும் Martingale & Consecutive Loss கணக்கு போகணும்!
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -731,32 +756,17 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
                 }
             }
         } else {
-            // 🛑 பெட் கட்டலை (Watch Mode-ல இருக்கு) ஆனா வாட்ச் லாஸ் கணக்கு மட்டும் ஏறும்
             if (cfg && cfg.watch) {
                 if (wasWin) {
-                    st.consecutiveLoss = 0; // வாட்ச் மோட்ல ஜெயிட்டா ஜீரோ ஆகிரும் அல்லது நீ விரும்பினா வச்சுக்கலாம்
+                    st.consecutiveLoss = 0; 
                 } else {
-                    st.consecutiveLoss++; // வாட்ச் மோட்ல லாஸ் ஆனா consecutiveLoss கூடும், அப்போதான் watchLoss limit-ஐ ரீச் பண்ணி பெட் ஸ்டார்ட் ஆகும்!
+                    st.consecutiveLoss++; 
                 }
             }
         }
     }
-
-    const patternStr = state.historyModes.join("");
-    const isSpecialPatternLoss = !wasWin && (patternStr.endsWith("NRNR") || patternStr.endsWith("RNRN"));
-
-    if (!isSpecialPatternLoss && (!state.forcedModeQueue || state.forcedModeQueue.length === 0)) {
-        if (wasWin) {
-            // Same mode
-        } else {
-            if (state.mode === "NORMAL") {
-                state.mode = "RECOVERY";
-            } else {
-                state.mode = "NORMAL";
-            }
-        }
-    }
 }
+
 function getStatus(userId) {
     initState(userId);
     const state = userStates[userId];
@@ -1006,6 +1016,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
+
 function showStats(chatId,userId){
     const d=stats[userId],rate=d.total?((d.win/d.total)*100).toFixed(1):"0.0";
     const bar="🟦".repeat(d.total?Math.round(d.win/d.total*10):0)+"⬜".repeat(d.total?10-Math.round(d.win/d.total*10):10);
