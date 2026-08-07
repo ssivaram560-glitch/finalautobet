@@ -844,7 +844,7 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
-"║ Pattern : "+(signal.pat || "N/A")+"\n"+
+"║ Pattern : "+(signal.pat || state.mode || "NORMAL")+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
 "╚══════════════════════════╝",
