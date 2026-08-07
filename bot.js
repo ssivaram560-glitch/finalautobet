@@ -567,9 +567,8 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
     return false;
 }
 // ============================================================
-// COMPLETE BOT LOGIC WITH WATCH LOSS, PATTERN SKIP, AND MODES
 // ============================================================
-// COMPLETE BOT LOGIC WITH 10-PERIOD WIN-BASED MODE SWITCHER
+// COMPLETE BOT LOGIC WITH 4-PREDICTION PATTERN MODE EXTENSION
 // ============================================================
 let userStates = {};
 
@@ -592,15 +591,17 @@ function initState(userId) {
         userStates[userId] = {
             mode: "NORMAL", 
             pendingPrediction: true,
-            skipCount: 0,
+            forcedModeCount: 0,     // 4 பிரிடிக்ஷன்கள் வரை அதே மோட் தொடர
+            activeForcedMode: null, // எந்த மோட் போர்ஸ் செய்யப்பட வேண்டும் (NORMAL/RECOVERY)
             historyModes: [],
-            periodCounter: 0,       // 10 பீரியடுகளைக் கணக்கிட
-            normalWinsIn10: 0,      // கடந்த 10 பீரியட்டில் நார்மல் வின்ஸ்
-            recoveryWinsIn10: 0     // கடந்த 10 பீரியட்டில் ரெக்கவரி வின்ஸ்
+            periodCounter: 0,       
+            normalWinsIn10: 0,      
+            recoveryWinsIn10: 0     
         };
     } else {
         if (!userStates[userId].historyModes) userStates[userId].historyModes = [];
-        if (userStates[userId].skipCount === undefined) userStates[userId].skipCount = 0;
+        if (userStates[userId].forcedModeCount === undefined) userStates[userId].forcedModeCount = 0;
+        if (userStates[userId].activeForcedMode === undefined) userStates[userId].activeForcedMode = null;
         if (userStates[userId].periodCounter === undefined) userStates[userId].periodCounter = 0;
         if (userStates[userId].normalWinsIn10 === undefined) userStates[userId].normalWinsIn10 = 0;
         if (userStates[userId].recoveryWinsIn10 === undefined) userStates[userId].recoveryWinsIn10 = 0;
@@ -615,17 +616,21 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    // ஒவ்வொரு 10 பீரியடு முடிந்ததும், எந்த மோட் அதிக வின் எடுத்ததோ அதை 11-வது பீரியடுக்கு செட் பண்றோம்
-    if (state.periodCounter >= 10) {
-        if (state.recoveryWinsIn10 > state.normalWinsIn10) {
-            state.mode = "RECOVERY";
-        } else if (state.normalWinsIn10 > state.recoveryWinsIn10) {
-            state.mode = "NORMAL";
+    // 4 பிரிடிக்ஷன்கள் போர்ஸ் மோடில் இருந்தால் அதைப் பயன்படுத்துகிறோம்
+    if (state.forcedModeCount > 0 && state.activeForcedMode) {
+        state.mode = state.activeForcedMode;
+    } else {
+        // 10 பீரியடு வின்ஸ் செக்கர்
+        if (state.periodCounter >= 10) {
+            if (state.recoveryWinsIn10 > state.normalWinsIn10) {
+                state.mode = "RECOVERY";
+            } else if (state.normalWinsIn10 > state.recoveryWinsIn10) {
+                state.mode = "NORMAL";
+            }
+            state.periodCounter = 0;
+            state.normalWinsIn10 = 0;
+            state.recoveryWinsIn10 = 0;
         }
-        // சமமாக இருந்தால் (Tie) லாஸ்ட் மோடே தொடரும், கவுண்டரை ரீசெட் பண்றோம்
-        state.periodCounter = 0;
-        state.normalWinsIn10 = 0;
-        state.recoveryWinsIn10 = 0;
     }
 
     const currentModeChar = state.mode === "NORMAL" ? "N" : "R";
@@ -661,7 +666,7 @@ function decidePrediction(list, currentLevel, userId) {
         type: "SIZE",
         val: prediction,
         conf: 85,
-        pat: state.mode
+        pat: state.mode + (state.forcedModeCount > 0 ? ` (F:${state.forcedModeCount})` : "")
     };
 }
 
@@ -669,10 +674,8 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
-    // பீரியட் கவுண்டரை இன்கிரிமென்ட் பண்றோம் (10 பீரியட் கணக்கிட)
     state.periodCounter++;
 
-    // எந்த மோடில் வின் அல்லது லாஸ் ஆனது என்பதை அந்தந்த 10 பீரியட் கவுண்டரில் சேமிக்கிறோம்
     if (wasWin) {
         if (state.mode === "NORMAL") {
             state.normalWinsIn10++;
@@ -681,15 +684,26 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // Pattern checking for Skip: "RNRN" அல்லது "NRNR" வந்து, தோற்றால் (Loss) 6 பீரியட் Skip
-    const patternStr = state.historyModes.join("");
-    if (!wasWin) {
-        if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
-            state.skipCount = 6;
+    // ஃபோர்ஸ் மோட் கவுண்டரைக் குறைக்கிறோம்
+    if (state.forcedModeCount > 0) {
+        state.forcedModeCount--;
+        if (wasWin) {
+            // Win ஆனா உடனே அந்த மோட் லூப் க்ளோஸ் ஆகிடணும்
+            state.forcedModeCount = 0;
+            state.activeForcedMode = null;
+        } else if (state.forcedModeCount === 0) {
+            state.activeForcedMode = null;
         }
     }
 
-    // Martingale Level & Consecutive Loss Update
+    // "RNRN" அல்லது "NRNR" பேட்டர்ன் செக்
+    const patternStr = state.historyModes.join("");
+    if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
+        state.activeForcedMode = state.mode; // கடைசியாக வந்த மோடே ஸ்டோர் ஆகும்
+        state.forcedModeCount = 4;           // அடுத்த 4 பிரிடிக்ஷன்களுக்கு அதே மோட் தொடரும்
+    }
+
+    // Martingale & Consecutive Loss Update
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -715,15 +729,16 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // Mode Switching Logic: 
-    // Win ஆனா அதே மோட்ல இருக்கும், Loss ஆனா மட்டும் மாறும்.
-    if (wasWin) {
-        // Same mode will continue for the next period unless 10-period rule overrides it
-    } else {
-        if (state.mode === "NORMAL") {
-            state.mode = "RECOVERY";
+    // சாதாரண மோட் ஸ்விட்ச் லாஜிக் (ஃபோர்ஸ் மோட் இல்லாவிட்டால் மட்டும்)
+    if (state.forcedModeCount === 0) {
+        if (wasWin) {
+            // Same mode
         } else {
-            state.mode = "NORMAL";
+            if (state.mode === "NORMAL") {
+                state.mode = "RECOVERY";
+            } else {
+                state.mode = "NORMAL";
+            }
         }
     }
 }
@@ -854,10 +869,6 @@ async function runPredict(userId, chatId) {
     if (!cfg.enabled) {
         abLine = "🤖 AutoBet: OFF";
         canBet = false;
-    } else if (state.skipCount > 0) {
-        abLine = `⏭️ SKIP BET (${state.skipCount} left)`;
-        state.skipCount--;
-        canBet = false;
     } else if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) {
         abLine = `👀 WATCHING: ${st.consecutiveLoss}/${cfg.watchLoss}`;
         canBet = false;
@@ -866,6 +877,8 @@ async function runPredict(userId, chatId) {
         const curBet = cfg.customBets[st.level-1] || (cfg.baseBet*MULT[st.level-1]);
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
+
+    const waitLine = (cfg.watch && st.consecutiveLoss < cfg.watchLoss) ? "\nWatch Loss: " + st.consecutiveLoss + "/" + cfg.watchLoss : "";
 
     await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -876,6 +889,8 @@ async function runPredict(userId, chatId) {
 "║ Pattern : "+(signal.pat || state.mode || "NORMAL")+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
+"Section Delay: "+cfg.restartDelay+" mins\n"+ 
+waitLine+"\n"+
 "╚══════════════════════════╝",
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
@@ -977,7 +992,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
-// ============================================================
 //  STATS
 // ============================================================
 function showStats(chatId,userId){
