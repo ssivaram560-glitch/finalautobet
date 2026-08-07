@@ -599,7 +599,7 @@ function initState(userId) {
             periodCounter: 0,        
             normalWinsIn20: 0,       
             recoveryWinsIn20: 0,
-            skipCount: 0 // 8 பிரடிக்ஷன்களை ஸ்கிப் செய்ய கவுன்டர்
+            lastPredictionWasLoss: false
         };
     } else {
         if (!userStates[userId].historyModes) userStates[userId].historyModes = [];
@@ -607,7 +607,7 @@ function initState(userId) {
         if (userStates[userId].periodCounter === undefined) userStates[userId].periodCounter = 0;
         if (userStates[userId].normalWinsIn20 === undefined) userStates[userId].normalWinsIn20 = 0;
         if (userStates[userId].recoveryWinsIn20 === undefined) userStates[userId].recoveryWinsIn20 = 0;
-        if (userStates[userId].skipCount === undefined) userStates[userId].skipCount = 0;
+        if (userStates[userId].lastPredictionWasLoss === undefined) userStates[userId].lastPredictionWasLoss = false;
     }
 }
 
@@ -619,23 +619,25 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    // ஒருவேளை ஸ்கிப் கவுன்டர் பாக்கியிருந்தால் செக் செய்யும்
-    if (state.skipCount > 0) {
-        return {
-            type: "SKIP",
-            val: "SKIP",
-            conf: 0,
-            pat: "SKIPPING (" + state.skipCount + "/8)"
-        };
-    }
-
     let prediction;
     let effectiveMode = state.mode;
+
+    // NRNR அல்லது RNRN பேட்டர்ன் செக் செய்து லாஸ் ஆனதா என்று பார்ப்பது
+    const patternStr = state.historyModes.join("");
+    if (state.lastPredictionWasLoss) {
+        if (patternStr.endsWith("NRNR")) {
+            effectiveMode = "RECOVERY"; // NRNR லாஸ் ஆனா R-க்கு மாறும்
+            state.mode = "RECOVERY";
+        } else if (patternStr.endsWith("RNRN")) {
+            effectiveMode = "NORMAL";   // RNRN லாஸ் ஆனா N-க்கு மாறும்
+            state.mode = "NORMAL";
+        }
+    }
 
     if (state.forcedModeQueue && state.forcedModeQueue.length > 0) {
         const nextChar = state.forcedModeQueue[0];
         effectiveMode = (nextChar === "R") ? "RECOVERY" : "NORMAL";
-    } else {
+    } else if (!state.lastPredictionWasLoss) {
         if (state.periodCounter >= 20) {
             if (state.recoveryWinsIn20 > state.normalWinsIn20) {
                 state.mode = "RECOVERY";
@@ -677,12 +679,6 @@ function decidePrediction(list, currentLevel, userId) {
         state.historyModes.shift();
     }
 
-    // புதிய NRNR அல்லது RNRN பேட்டர்னை செக் செய்து 8 முறை ஸ்கிப் செய்ய সেট செய்தல்
-    const patternStr = state.historyModes.join("");
-    if (patternStr.endsWith("NRNR") || patternStr.endsWith("RNRN")) {
-        state.skipCount = 8;
-    }
-
     return {
         type: "SIZE",
         val: prediction,
@@ -695,11 +691,8 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
-    // ஸ்கிப் மோடில் இருந்தால் கவுன்ட்டரை குறைக்கவும்
-    if (state.skipCount > 0) {
-        state.skipCount--;
-        return;
-    }
+    // லாஸ் ஆனா இல்லையானு ஸ்டோர் செய்து வைக்கிறோம்
+    state.lastPredictionWasLoss = !wasWin;
 
     state.periodCounter++;
 
@@ -746,7 +739,10 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    if (!state.forcedModeQueue || state.forcedModeQueue.length === 0) {
+    const patternStr = state.historyModes.join("");
+    const isSpecialPatternLoss = !wasWin && (patternStr.endsWith("NRNR") || patternStr.endsWith("RNRN"));
+
+    if (!isSpecialPatternLoss && (!state.forcedModeQueue || state.forcedModeQueue.length === 0)) {
         if (wasWin) {
             // Same mode
         } else {
@@ -879,23 +875,6 @@ async function runPredict(userId, chatId) {
     const signal = decidePrediction(list, st.level, userId);
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
-    // ஒருவேளை ஸ்கிப் மோடில் இருந்தால் பெட் வைக்காமல் மெசேஜ் மட்டும் அனுப்பும்
-    if (signal.type === "SKIP") {
-        await send(chatId,
-"╔══════════════════════════╗\n"+
-"║    👑 EARN WITH ME AI    ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Period  : "+next.slice(-6)+"\n"+
-"║ Signal  : ⚠️ SKIPPING    ║\n"+
-"║ Pattern : "+signal.pat+"\n"+
-"╠══════════════════════════╣\n"+
-"║ 🤖 AutoBet: SKIPPED      ║\n"+
-"╚══════════════════════════╝"
-        );
-        checkResult(userId, chatId, next, signal.val, signal.type, false);
-        return;
-    }
-
     let abLine = "🤖 AutoBet: OFF";
     let canBet = false;
 
@@ -967,16 +946,8 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         const num = parseInt(res.number || res.winNumber || 0);
         let actual;
         if (predType === "SIZE") actual = num >= 5 ? "BIG" : "SMALL";
-        else if (predType === "SKIP") actual = "SKIP";
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         
-        // ஸ்கிப் மோடாக இருந்தால் பெட் மற்றும் வின் செக்கைத் தவிர்த்துவிட்டு அடுத்த பிரடிக்ஷனுக்கு செல்லும்
-        if (predType === "SKIP") {
-            updateAfterResult(userId, false, actual, false);
-            setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
-            return;
-        }
-
         const win = predicted === actual;
         const betLevel = st.level;
 
