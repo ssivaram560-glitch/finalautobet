@@ -611,6 +611,13 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
+    // ஒவ்வொரு முறையும் பிரிடிக்ஷன் எடுக்கும்போதே தற்போதைய மோடை ஹிஸ்டரியில் பதிவிடுகிறோம் (Pattern Tracking)
+    const currentModeChar = state.mode === "NORMAL" ? "N" : "R";
+    state.historyModes.push(currentModeChar);
+    if (state.historyModes.length > 10) {
+        state.historyModes.shift();
+    }
+
     const currentPeriod = String(list[0].issueNumber);
     const currentResult = parseInt(list[0].number || list[0].winNumber || 0);
 
@@ -646,13 +653,6 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
-    // 1. Regular Mode History tracking (N for Normal, R for Recovery/Loss pattern analysis)
-    const currentModeChar = state.mode === "NORMAL" ? "N" : "R";
-    state.historyModes.push(currentModeChar);
-    if (state.historyModes.length > 10) {
-        state.historyModes.shift();
-    }
-
     // Pattern checking for Skip: "RNRN" அல்லது "NRNR" வந்து, தோற்றால் (Loss) 6 பீரியட் Skip செய்ய வேண்டும்
     const patternStr = state.historyModes.join("");
     if (!wasWin) {
@@ -661,7 +661,7 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // 2. Martingale Level & Consecutive Loss Update (Watch Loss & Bet Placed logic)
+    // Martingale Level & Consecutive Loss Update (Watch Loss & Bet Placed logic)
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -679,7 +679,6 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
                 }
             }
         } else {
-            // Watch Mode-ல் இருக்கும்போதும் regular ஆக consecutiveLoss கணக்கிடப்பட வேண்டும்
             if (wasWin) {
                 st.consecutiveLoss = 0;
             } else {
@@ -688,7 +687,7 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // 3. Mode Switching Logic
+    // Mode Switching Logic
     if (wasWin) {
         // Win ஆன அதே மோடில் தொடரும்
     } else {
@@ -949,7 +948,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
-
 // ============================================================
 //  STATS
 // ============================================================
