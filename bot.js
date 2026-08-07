@@ -568,7 +568,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
 }
 // ============================================================
 // ============================================================
-// COMPLETE BOT LOGIC WITH 4-PREDICTION PATTERN MODE EXTENSION
+// COMPLETE BOT LOGIC WITH 4-PREDICTION PATTERN MODE EXTENSION & FIXES
 // ============================================================
 let userStates = {};
 
@@ -591,8 +591,8 @@ function initState(userId) {
         userStates[userId] = {
             mode: "NORMAL", 
             pendingPrediction: true,
-            forcedModeCount: 0,     // 4 பிரிடிக்ஷன்கள் வரை அதே மோட் தொடர
-            activeForcedMode: null, // எந்த மோட் போர்ஸ் செய்யப்பட வேண்டும் (NORMAL/RECOVERY)
+            forcedModeCount: 0,     
+            activeForcedMode: null, 
             historyModes: [],
             periodCounter: 0,       
             normalWinsIn10: 0,      
@@ -616,11 +616,9 @@ function decidePrediction(list, currentLevel, userId) {
     initState(userId);
     const state = userStates[userId];
 
-    // 4 பிரிடிக்ஷன்கள் போர்ஸ் மோடில் இருந்தால் அதைப் பயன்படுத்துகிறோம்
     if (state.forcedModeCount > 0 && state.activeForcedMode) {
         state.mode = state.activeForcedMode;
     } else {
-        // 10 பீரியடு வின்ஸ் செக்கர்
         if (state.periodCounter >= 10) {
             if (state.recoveryWinsIn10 > state.normalWinsIn10) {
                 state.mode = "RECOVERY";
@@ -684,11 +682,9 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // ஃபோர்ஸ் மோட் கவுண்டரைக் குறைக்கிறோம்
     if (state.forcedModeCount > 0) {
         state.forcedModeCount--;
         if (wasWin) {
-            // Win ஆனா உடனே அந்த மோட் லூப் க்ளோஸ் ஆகிடணும்
             state.forcedModeCount = 0;
             state.activeForcedMode = null;
         } else if (state.forcedModeCount === 0) {
@@ -696,14 +692,12 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // "RNRN" அல்லது "NRNR" பேட்டர்ன் செக்
     const patternStr = state.historyModes.join("");
     if (patternStr.endsWith("RNRN") || patternStr.endsWith("NRNR")) {
-        state.activeForcedMode = state.mode; // கடைசியாக வந்த மோடே ஸ்டோர் ஆகும்
-        state.forcedModeCount = 4;           // அடுத்த 4 பிரிடிக்ஷன்களுக்கு அதே மோட் தொடரும்
+        state.activeForcedMode = state.mode; 
+        state.forcedModeCount = 4;           
     }
 
-    // Martingale & Consecutive Loss Update
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId];
@@ -729,7 +723,6 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // சாதாரண மோட் ஸ்விட்ச் லாஜிக் (ஃபோர்ஸ் மோட் இல்லாவிட்டால் மட்டும்)
     if (state.forcedModeCount === 0) {
         if (wasWin) {
             // Same mode
@@ -866,7 +859,7 @@ async function runPredict(userId, chatId) {
     let abLine = "🤖 AutoBet: OFF";
     let canBet = false;
 
-    if (!cfg.enabled) {
+    if (!cfg || !cfg.enabled) {
         abLine = "🤖 AutoBet: OFF";
         canBet = false;
     } else if (cfg.watch && st.consecutiveLoss < cfg.watchLoss) {
@@ -878,7 +871,9 @@ async function runPredict(userId, chatId) {
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
 
-    const waitLine = (cfg.watch && st.consecutiveLoss < cfg.watchLoss) ? "\nWatch Loss: " + st.consecutiveLoss + "/" + cfg.watchLoss : "";
+    const patternName = signal && signal.pat ? signal.pat : (state && state.mode ? state.mode : "NORMAL");
+    const delayMins = cfg && cfg.restartDelay ? cfg.restartDelay : 1;
+    const waitLine = (cfg && cfg.watch && st.consecutiveLoss < cfg.watchLoss) ? "\nWatch Loss: " + st.consecutiveLoss + "/" + cfg.watchLoss : "";
 
     await send(chatId,
 "╔══════════════════════════╗\n"+
@@ -886,10 +881,10 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
-"║ Pattern : "+(signal.pat || state.mode || "NORMAL")+"\n"+
+"║ Pattern : "+patternName+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
-"Section Delay: "+cfg.restartDelay+" mins\n"+ 
+"║ Section Delay: "+delayMins+" mins\n"+ 
 waitLine+"\n"+
 "╚══════════════════════════╝",
         {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
@@ -992,7 +987,6 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
 }
 
 module.exports = { decidePrediction, updateAfterResult, getStatus, initState, buildBSFromList, runPredict, checkResult };
-//  STATS
 // ============================================================
 function showStats(chatId,userId){
     const d=stats[userId],rate=d.total?((d.win/d.total)*100).toFixed(1):"0.0";
