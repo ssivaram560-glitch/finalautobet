@@ -7,7 +7,7 @@ const puppeteer   = require('puppeteer');
 // ============================================================
 //  CONFIG
 // ============================================================
-const BOT_TOKEN    ="8692459169:AAErtwnYdbidRosbajL-1DGfZs3NzuoZsqg";
+const BOT_TOKEN    ="8692459169:AAHmpdQ3pcdmi0lPJzmHiw7N-H7l1QzP8kI";
 const OWNER_ID     = 8321379592;
 const OWNER_PASS   = "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
@@ -596,11 +596,10 @@ function initState(userId) {
             pendingPrediction: true,
             forcedModeQueue: [],    
             historyModes: [],
-            periodCounter: 0,       
-            normalWinsIn20: 0,      
+            periodCounter: 0,        
+            normalWinsIn20: 0,       
             recoveryWinsIn20: 0,
-            waitingFor4Loss: false, // பேட்டர்ன் வந்ததும் 4 லாஸ்க்காக காத்திருக்க
-            consecutiveLossCount: 0 // நடுவுல வின் வருதான்னு செக் செய்ய
+            skipCount: 0 // 8 பிரடிக்ஷன்களை ஸ்கிப் செய்ய கவுன்டர்
         };
     } else {
         if (!userStates[userId].historyModes) userStates[userId].historyModes = [];
@@ -608,8 +607,7 @@ function initState(userId) {
         if (userStates[userId].periodCounter === undefined) userStates[userId].periodCounter = 0;
         if (userStates[userId].normalWinsIn20 === undefined) userStates[userId].normalWinsIn20 = 0;
         if (userStates[userId].recoveryWinsIn20 === undefined) userStates[userId].recoveryWinsIn20 = 0;
-        if (userStates[userId].waitingFor4Loss === undefined) userStates[userId].waitingFor4Loss = false;
-        if (userStates[userId].consecutiveLossCount === undefined) userStates[userId].consecutiveLossCount = 0;
+        if (userStates[userId].skipCount === undefined) userStates[userId].skipCount = 0;
     }
 }
 
@@ -620,6 +618,16 @@ function decidePrediction(list, currentLevel, userId) {
 
     initState(userId);
     const state = userStates[userId];
+
+    // ஒருவேளை ஸ்கிப் கவுன்டர் பாக்கியிருந்தால் செக் செய்யும்
+    if (state.skipCount > 0) {
+        return {
+            type: "SKIP",
+            val: "SKIP",
+            conf: 0,
+            pat: "SKIPPING (" + state.skipCount + "/8)"
+        };
+    }
 
     let prediction;
     let effectiveMode = state.mode;
@@ -669,6 +677,12 @@ function decidePrediction(list, currentLevel, userId) {
         state.historyModes.shift();
     }
 
+    // புதிய NRNR அல்லது RNRN பேட்டர்னை செக் செய்து 8 முறை ஸ்கிப் செய்ய সেট செய்தல்
+    const patternStr = state.historyModes.join("");
+    if (patternStr.endsWith("NRNR") || patternStr.endsWith("RNRN")) {
+        state.skipCount = 8;
+    }
+
     return {
         type: "SIZE",
         val: prediction,
@@ -681,6 +695,12 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initState(userId);
     const state = userStates[userId];
     
+    // ஸ்கிப் மோடில் இருந்தால் கவுன்ட்டரை குறைக்கவும்
+    if (state.skipCount > 0) {
+        state.skipCount--;
+        return;
+    }
+
     state.periodCounter++;
 
     const currentActiveMode = (state.historyModes.length > 0) ? state.historyModes[state.historyModes.length - 1] : (state.mode === "NORMAL" ? "N" : "R");
@@ -692,44 +712,13 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         }
     }
 
-    // 1. அல்ட்ரா மோட் கியூவில் இருந்தால் இயங்கும்
     if (state.forcedModeQueue && state.forcedModeQueue.length > 0) {
         if (wasWin) {
-            // நடுவுல வின் வந்தா உடனே கியூ கட் ஆகிடும்
             state.forcedModeQueue = [];
         } else {
             state.forcedModeQueue.shift(); 
         }
     } 
-    // 2. பேட்டர்ன் முடிந்து 4 லாஸ்களுக்காக காத்திருக்கும் நிலை
-    else if (state.waitingFor4Loss) {
-        if (wasWin) {
-            // நடுவுல ஒரு வின் வந்தாலும் இந்த ரூல் டோட்டலா கேன்சல்! அல்ட்ரா மோட் வராது.
-            state.waitingFor4Loss = false;
-            state.consecutiveLossCount = 0;
-        } else {
-            state.consecutiveLossCount++;
-            if (state.consecutiveLossCount >= 4) {
-                // கரெக்டா 4-ம் தொடர்ந்து லாஸ் ஆயிடுச்சு! இப்போ அல்ட்ரா மோட் ஸ்டார்ட் ஆகும்.
-                const patternStr = state.historyModes.join("");
-                if (patternStr.includes("NRNR")) {
-                    state.forcedModeQueue = ["R", "N", "R", "N"];
-                } else if (patternStr.includes("RNRN")) {
-                    state.forcedModeQueue = ["N", "R", "N", "R"];
-                }
-                state.waitingFor4Loss = false;
-                state.consecutiveLossCount = 0;
-            }
-        }
-    } 
-    // 3. புதிய NRNR அல்லது RNRN பேட்டர்னை செக் செய்தல்
-    else {
-        const patternStr = state.historyModes.join("");
-        if (patternStr.endsWith("NRNR") || patternStr.endsWith("RNRN")) {
-            state.waitingFor4Loss = true;
-            state.consecutiveLossCount = 0;
-        }
-    }
 
     // Martingale & Consecutive Loss Update
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
@@ -761,12 +750,10 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
         if (wasWin) {
             // Same mode
         } else {
-            if (!state.waitingFor4Loss) {
-                if (state.mode === "NORMAL") {
-                    state.mode = "RECOVERY";
-                } else {
-                    state.mode = "NORMAL";
-                }
+            if (state.mode === "NORMAL") {
+                state.mode = "RECOVERY";
+            } else {
+                state.mode = "NORMAL";
             }
         }
     }
@@ -892,6 +879,23 @@ async function runPredict(userId, chatId) {
     const signal = decidePrediction(list, st.level, userId);
     if(!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
 
+    // ஒருவேளை ஸ்கிப் மோடில் இருந்தால் பெட் வைக்காமல் மெசேஜ் மட்டும் அனுப்பும்
+    if (signal.type === "SKIP") {
+        await send(chatId,
+"╔══════════════════════════╗\n"+
+"║    👑 EARN WITH ME AI    ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Period  : "+next.slice(-6)+"\n"+
+"║ Signal  : ⚠️ SKIPPING    ║\n"+
+"║ Pattern : "+signal.pat+"\n"+
+"╠══════════════════════════╣\n"+
+"║ 🤖 AutoBet: SKIPPED      ║\n"+
+"╚══════════════════════════╝"
+        );
+        checkResult(userId, chatId, next, signal.val, signal.type, false);
+        return;
+    }
+
     let abLine = "🤖 AutoBet: OFF";
     let canBet = false;
 
@@ -963,8 +967,16 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         const num = parseInt(res.number || res.winNumber || 0);
         let actual;
         if (predType === "SIZE") actual = num >= 5 ? "BIG" : "SMALL";
+        else if (predType === "SKIP") actual = "SKIP";
         else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
         
+        // ஸ்கிப் மோடாக இருந்தால் பெட் மற்றும் வின் செக்கைத் தவிர்த்துவிட்டு அடுத்த பிரடிக்ஷனுக்கு செல்லும்
+        if (predType === "SKIP") {
+            updateAfterResult(userId, false, actual, false);
+            setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
+            return;
+        }
+
         const win = predicted === actual;
         const betLevel = st.level;
 
