@@ -819,22 +819,27 @@ function getSequenceAmount(userId, level, kind = "default") {
     return Number(seq?.[level - 1] ?? (cfg.baseBet * (MULT[level - 1] || 1)));
 }
 
-// Combined mode uses independent progression: category advances 2x, numbers advance 9x.
-// The returned amounts are then hedged so a category win OR either exact number win
-// remains positive after the other losing stakes are deducted.
+// Combined mode always places exactly TWO bets per period:
+// 1) one BIG/SMALL bet using customSizeBets[level]
+// 2) one exact-number bet from the opposite side using customNumberBets[level]
+// Amounts are used exactly as configured; no hidden hedging or mutation.
 function getCombinedBetAmounts(userId, sizeLevel, numberLevel) {
     const cfg = autobetCfg[userId] || {};
     const base = Math.max(1, Number(cfg.baseBet) || 1);
-    const sizeRaw = Number(cfg.customSizeBets?.[sizeLevel - 1] ?? (base * Math.pow(2, Math.max(0, sizeLevel - 1))));
-    const numberRaw = Number(cfg.customNumberBets?.[numberLevel - 1] ?? (base * Math.pow(9, Math.max(0, numberLevel - 1))));
-    // WinGo-style conservative net assumptions: category net +0.98x, number net +8x.
-    let numberEach = Math.max(1, numberRaw);
-    let sizeAmount = Math.max(1, sizeRaw);
-    for (let i = 0; i < 4; i++) {
-        numberEach = Math.max(numberEach, Math.ceil((sizeAmount + numberEach) / 8) + 1);
-        sizeAmount = Math.max(sizeAmount, Math.ceil((2 * numberEach) / 0.98) + 1);
-    }
-    return { size: sizeAmount, number: numberEach };
+    const sizeAmount = Number(cfg.customSizeBets?.[sizeLevel - 1] ?? base);
+    const numberAmount = Number(cfg.customNumberBets?.[numberLevel - 1] ?? base);
+    return {
+        size: Number.isFinite(sizeAmount) && sizeAmount > 0 ? sizeAmount : base,
+        number: Number.isFinite(numberAmount) && numberAmount > 0 ? numberAmount : base
+    };
+}
+
+function pickOppositeSideNumber(predictedSize, numbers = []) {
+    const pool = predictedSize === "BIG" ? [0, 1, 2, 3, 4] : [5, 6, 7, 8, 9];
+    const valid = Array.isArray(numbers)
+        ? numbers.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 9)
+        : [];
+    return valid.find(n => pool.includes(n)) ?? pool[0];
 }
 
 function combinedSettlement(bets, actualSize, actualNumber) {
@@ -984,14 +989,16 @@ function decidePrediction(list, currentLevel, userId) {
             bets: [{ type: "NUMBER", val: 5, kind: "number" }] };
     }
     if (betMode === "COMBINED") {
-        const siteNums = Array.isArray(latestSitePrediction?.numbers) && latestSitePrediction.numbers.length === 2
+        // BIG => exactly one SMALL-side number (0-4).
+        // SMALL => exactly one BIG-side number (5-9).
+        const siteNums = Array.isArray(latestSitePrediction?.numbers)
             ? latestSitePrediction.numbers
-            : [engine.numbers.small, engine.numbers.big];
-        return { type: "COMBINED", val: prediction, conf: 85, pat: formulaMode + "_COMBINED",
+            : [];
+        const oppositeNumber = pickOppositeSideNumber(prediction, siteNums);
+        return { type: "COMBINED", val: prediction, number: oppositeNumber, conf: 85, pat: formulaMode + "_COMBINED",
             bets: [
                 { type: "SIZE", val: prediction, kind: "size" },
-                { type: "NUMBER", val: siteNums[0], kind: "number" },
-                { type: "NUMBER", val: siteNums[1], kind: "number" }
+                { type: "NUMBER", val: oppositeNumber, kind: "number" }
             ] };
     }
     return { type: "SIZE", val: prediction, conf: 85, pat: formulaMode,
@@ -1233,7 +1240,7 @@ async function runPredict(userId, chatId) {
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Mode    : "+modeLabel(cfg.mode)+"\n"+
 "║ Signal  : "+(signal.type==="NUMBER"?"🔢 NUMBER "+signal.val:(signal.val==="COMBINED"?"🔀 "+signal.val:""+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")))+"\n"+
-(cfg.mode==="COMBINED" ? "║ Numbers : Small "+signal.bets.find(b=>b.type==="NUMBER" && Number(b.val)<=4)?.val+" | Big "+signal.bets.find(b=>b.type==="NUMBER" && Number(b.val)>=5)?.val+"\n" : "")+
+    (cfg.mode==="COMBINED" ? "║ Number  : "+signal.bets.find(b=>b.type==="NUMBER")?.val+" (opposite side)\n" : "")+
 "║ Pattern : "+patternName+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
@@ -1494,7 +1501,7 @@ async function autobetStatus(chatId, userId) {
 "Token    : "+(token.length>20?"✅":"❌")+"\n"+
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n"+
 "Mode     : "+modeLabel(cfg.mode)+"\n"+
-(cfg.mode === "COMBINED" ? "Size Bets: ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Bets : ₹"+cfg.customNumberBets.join(" → ₹")+"\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
+    (cfg.mode === "COMBINED" ? "Size Bets: ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Bets : ₹"+cfg.customNumberBets.join(" → ₹")+"\nRule     : 1 size + 1 opposite number\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+st.consecutiveLoss+"/"+cfg.watchLoss+"\n"+
 "Base Bet : ₹"+cfg.baseBet+"\n"+
@@ -1776,7 +1783,7 @@ function addHandlers(){
 "Token    : "+(getToken(id).length>20?"✅ SET":"❌ MISSING")+"\n"+
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌ /setcreds")+"\n"+
 "Mode     : "+modeLabel(cfg.mode)+"\n"+
-(cfg.mode === "COMBINED" ? "Size Seq : ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Seq  : ₹"+cfg.customNumberBets.join(" → ₹")+"\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
+    (cfg.mode === "COMBINED" ? "Size Seq : ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Seq  : ₹"+cfg.customNumberBets.join(" → ₹")+"\nRule     : 1 size + 1 opposite number\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+cfg.watchLoss+" consecutive\n"+
 "Base Bet : ₹"+cfg.baseBet+"\n"+
