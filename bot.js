@@ -9,9 +9,9 @@ const puppeteer   = require('puppeteer');
 // ============================================================
 // WARNING: These credentials were shared in chat and should be rotated after deployment.
 // ============================================================
-const BOT_TOKEN    ="8670635800:AAEeDoWmav3IL5Pj19shmaSfTHNuLjaT9Lw";
-const OWNER_ID     = 8869874751;
-const OWNER_PASS   = "2004";
+const BOT_TOKEN    = process.env.BOT_TOKEN || "8687914335:AAEYJ87rtDyqs_4HpFvkOnkU8O9oiEy8PmE";
+const OWNER_ID     = Number(process.env.OWNER_ID || 8869874751);
+const OWNER_PASS   = process.env.OWNER_PASS || "";
 const ADMIN_HANDLE = "@Sivakutty1";
 const REG_LINK     = "https://bdgwinuu.com/#/register?invitationCode=7442815992780";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
@@ -47,6 +47,13 @@ if (RENDER_URL) {
 // ============================================================
 //  STORAGE
 // ============================================================
+const SITE_URL = process.env.SITE_URL || "https://bdgwinuu.com/";
+let hiddenSiteCloseTimer = null;
+let hiddenPage = null;
+let hiddenBrowser = null;
+let hiddenPagePromise = null;
+let hiddenSiteLastUsed = 0;
+
 let ownerLoggedIn  = false;
 let adminPasswords = {};
 let adminLoggedIn  = {};
@@ -806,36 +813,42 @@ function recoverPolling(err) {
         }
     }, 5000);
 }
-function startBot(){
+async function startBot(){
     if (!BOT_TOKEN) throw new Error("BOT_TOKEN environment variable is required");
-    if(bot){try{bot.stopPolling();}catch(e){}}
-    bot=new TelegramBot(BOT_TOKEN,{polling:{interval:1000,autoStart:true,params:{timeout:30}}});
-    bot.on("polling_error",err=>{
-        const msg = err?.message || String(err);
-        if (msg.includes("ECONNRESET") || msg.includes("EFATAL") || msg.includes("socket hang up")) {
-            recoverPolling(err);
-            return;
-        }
-        console.error("Poll:", msg);
-    });
-    bot.on("error",err=>{
-        const msg = err?.message || String(err);
-        if (msg.includes("ECONNRESET") || msg.includes("EFATAL") || msg.includes("socket hang up")) {
-            console.warn("Bot error recovered:", msg);
-            return;
-        }
-        console.error("Bot:", msg);
-    });
+    if (bot) { try { await bot.stopPolling(); } catch (e) {} }
+
+    // Telegram does not allow webhook and long polling simultaneously.
+    bot = new TelegramBot(BOT_TOKEN, { polling: false });
+    bot.on("polling_error", err => console.error("[POLLING ERROR]", err?.response?.body || err?.stack || err));
+    bot.on("error", err => console.error("[BOT ERROR]", err?.response?.body || err?.stack || err));
+
     addHandlers();
-    console.log("✅ SIVA BOT running...");
-
+    await bot.deleteWebHook({ drop_pending_updates: false });
+    await bot.startPolling({ interval: 1000, params: { timeout: 30 } });
+    console.log("✅ SIVA BOT running and polling...");
 }
 
-async function send(chatId,text,opts={}){
-    try{return await bot.sendMessage(chatId,text,opts);}
-    catch(e){if(e.message&&e.message.includes("parse entities")){try{const o={...opts};delete o.parse_mode;return await bot.sendMessage(chatId,text,o);}catch(e2){}}console.error("send:",e.message?.substr(0,60));}
+async function send(chatId, text, opts = {}){
+    try {
+        console.log("[SEND]", { chatId, text: String(text).slice(0, 120) });
+        return await bot.sendMessage(chatId, String(text), opts);
+    } catch (e) {
+        console.error("[SEND ERROR]", { chatId, message: e?.message, body: e?.response?.body, stack: e?.stack });
+        if (e?.message?.toLowerCase().includes("parse entities") && opts.parse_mode) {
+            try {
+                const retryOpts = { ...opts };
+                delete retryOpts.parse_mode;
+                return await bot.sendMessage(chatId, String(text), retryOpts);
+            } catch (retryError) {
+                console.error("[SEND RETRY ERROR]", retryError?.response?.body || retryError?.stack || retryError);
+            }
+        }
+    }
 }
-async function sendSticker(chatId,sid){try{await bot.sendSticker(chatId,sid);}catch(e){}}
+async function sendSticker(chatId, sid){
+    try { return await bot.sendSticker(chatId, sid); }
+    catch (e) { console.error("[STICKER ERROR]", { chatId, message: e?.message, body: e?.response?.body }); }
+}
 
 // ============================================================
 //  AUTO LOGIN TASK
@@ -1175,4 +1188,8 @@ if(text==="🔢 Set Watch Losses"){
         if(text==="📩 Contact") send(msg.chat.id,"📩 "+ADMIN_HANDLE+"\nID: "+id);
     });
 }
-startBot();
+
+startBot().catch(err => {
+    console.error("❌ BOT START FAILED:", err?.response?.body || err?.stack || err);
+    process.exitCode = 1;
+});
