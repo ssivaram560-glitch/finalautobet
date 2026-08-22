@@ -674,7 +674,7 @@ function getStatus(userId) {
     return `${state.currentMode || "SAME"} MODE | L${st?.level || 1} | History: ${state.resultHistory.join("")}`;
 }
 
-//  SAME / OPPOSITE DUAL-SIGNAL PREDICTION ENGINE
+//  CALCULATION + W/L MODE PREDICTION ENGINE
 // ============================================================
 function normalizeSize(value) {
     const v = String(value || "").toUpperCase();
@@ -686,145 +686,123 @@ function sizeOf(row) {
     return fromApi || (Number(row.number) >= 5 ? "B" : "S");
 }
 
-function colorOf(row) {
-    const raw = String(row.color || "").toUpperCase();
-    if (raw.includes("RED")) return "RED";
-    if (raw.includes("GREEN")) return "GREEN";
-    const n = Number(row.number);
-    return n === 0 || n === 2 || n === 4 || n === 6 || n === 8 ? "RED" : "GREEN";
-}
-
 function nextIssueNumber(list) {
     if (!list?.length) return null;
     return (BigInt(list[0].issueNumber) + 1n).toString();
 }
 
-function analyzeDimension(rows, dimension, valueOf) {
-    if (!Array.isArray(rows) || rows.length < 4) return null;
-    const chronological = [...rows].sort((a, b) => BigInt(a.issueNumber) < BigInt(b.issueNumber) ? -1 : 1);
-    const reference = chronological[chronological.length - 2];
-    const values = chronological.map(valueOf);
-    const pairs = [];
-
-    for (let i = 0; i + 2 < chronological.length; i++) {
-        if (BigInt(chronological[i + 2].issueNumber) !== BigInt(chronological[i].issueNumber) + 2n) continue;
-        const leftValue = values[i];
-        const rightValue = values[i + 2];
-        if (!leftValue || !rightValue) continue;
-        pairs.push({
-            from: chronological[i].issueNumber,
-            to: chronological[i + 2].issueNumber,
-            leftValue,
-            rightValue,
-            mode: leftValue === rightValue ? "SAME" : "OPPOSITE"
-        });
-    }
-    if (pairs.length < 2) return null;
-
-    const modeSequence = pairs.map(pair => pair.mode === "SAME" ? "S" : "O");
-    const sameCount = modeSequence.filter(mode => mode === "S").length;
-    const oppositeCount = modeSequence.length - sameCount;
-    const patternCounts = {};
-    const patternContinuations = {};
-
-    // Dynamic patterns of every available length. No fixed SS/SO/OS/OO list.
-    for (let length = 2; length <= modeSequence.length; length++) {
-        for (let i = 0; i + length <= modeSequence.length; i++) {
-            const pattern = modeSequence.slice(i, i + length).join("");
-            patternCounts[pattern] = (patternCounts[pattern] || 0) + 1;
-            const nextMode = modeSequence[i + length];
-            if (nextMode) {
-                if (!patternContinuations[pattern]) patternContinuations[pattern] = { S: 0, O: 0 };
-                patternContinuations[pattern][nextMode]++;
-            }
-        }
-    }
-
-    let latestPattern = null;
-    let followingSame = 0;
-    let followingOpposite = 0;
-    for (let length = modeSequence.length; length >= 2; length--) {
-        const candidate = modeSequence.slice(-length).join("");
-        const continuation = patternContinuations[candidate];
-        if (continuation && continuation.S + continuation.O > 0) {
-            latestPattern = candidate;
-            followingSame = continuation.S;
-            followingOpposite = continuation.O;
-            break;
-        }
-    }
-
-    const globalTie = sameCount === oppositeCount;
-    const patternTie = followingSame === followingOpposite;
-    const predictionMode = followingSame + followingOpposite > 0 && !patternTie
-        ? (followingSame < followingOpposite ? "SAME" : "OPPOSITE")
-        : (globalTie ? pairs[pairs.length - 1].mode : (sameCount < oppositeCount ? "SAME" : "OPPOSITE"));
-
-    const referenceValue = valueOf(reference);
-    const predictedValue = predictionMode === "SAME"
-        ? referenceValue
-        : (dimension === "SIZE" ? (referenceValue === "B" ? "S" : "B") : (referenceValue === "RED" ? "GREEN" : "RED"));
-
-    return {
-        dimension,
-        type: dimension,
-        value: predictedValue,
-        mode: predictionMode,
-        referencePeriod: reference.issueNumber,
-        referenceValue,
-        latestPeriod: chronological[chronological.length - 1].issueNumber,
-        latestCompletedPeriod: chronological[chronological.length - 1].issueNumber,
-        latestCompletedValue: values[values.length - 1],
-        pairCount: pairs.length,
-        sameCount,
-        oppositeCount,
-        latestPattern,
-        patternLength: latestPattern ? latestPattern.length : 0,
-        patternCount: latestPattern ? (patternCounts[latestPattern] || 0) : 0,
-        followingSame,
-        followingOpposite,
-        patternCounts,
-        patternContinuations,
-        pairs,
-        modeSequence,
-        // Prefer the dimension with the longest proven current pattern,
-        // then the strongest continuation evidence.
-        strength: (latestPattern ? latestPattern.length : 0) * 1000000 +
-                  (followingSame + followingOpposite) * 1000 +
-                  (latestPattern ? (patternCounts[latestPattern] || 0) : 0)
-    };
+function calculateNormalSize(period, currentNumber) {
+    const n = Number(currentNumber);
+    if (!Number.isInteger(n) || n < 0 || n > 9 || n === 0) return null;
+    const nextLast3 = Number(String(BigInt(period) + 1n).slice(-3));
+    const answer = nextLast3 * Math.exp(n);
+    const noDecimal = answer.toString().replace(".", "");
+    const first14 = noDecimal.substring(0, 14);
+    if (!first14) return null;
+    const lastDigit = Number(first14.charAt(first14.length - 1));
+    return lastDigit <= 4 ? "S" : "B";
 }
 
-function decidePrediction(list) {
-    if (!Array.isArray(list) || list.length < 4) return null;
-    const target = nextIssueNumber(list);
-    if (!target) return null;
-
-    const sizeSignal = analyzeDimension(list, "SIZE", sizeOf);
-    const colorSignal = analyzeDimension(list, "COLOR", colorOf);
-    if (!sizeSignal && !colorSignal) return null;
-
-    // Only one category is emitted. The dimension whose current pattern has
-    // the strongest historical continuation becomes the active signal.
-    const active = !colorSignal ? sizeSignal : !sizeSignal ? colorSignal
-        : (colorSignal.strength > sizeSignal.strength ? colorSignal : sizeSignal);
-
-    return {
-        ...active,
-        val: active.dimension === "SIZE" ? (active.value === "B" ? "BIG" : "SMALL") : active.value,
-        targetPeriod: target,
-        analyzedRows: list.length,
-        sizeAnalysis: sizeSignal,
-        colorAnalysis: colorSignal,
-        signalReason: active.dimension === "COLOR" ? "COLOR pattern is stronger" : "BIG/SMALL pattern is stronger",
-        history: active.modeSequence.join(""),
-        predictionDetails: {
-            activeDimension: active.dimension,
-            rule: active.mode === "SAME" ? "same as reference" : "opposite of reference",
-            pattern: active.latestPattern,
-            patternLength: active.patternLength,
-            continuation: "S:" + active.followingSame + " / O:" + active.followingOpposite
+function chooseModeFromWL(wlSequence, fallbackMode) {
+    if (!Array.isArray(wlSequence) || !wlSequence.length) return { mode: fallbackMode || "NORMAL", pattern: "", continuationCounts: {}, patternLength: 0, patternMatches: 0 };
+    let selectedPattern = null;
+    let selectedContinuation = null;
+    for (let length = wlSequence.length; length >= 1; length--) {
+        const candidate = wlSequence.slice(-length).join("");
+        let matches = 0;
+        const nextCounts = { W: 0, L: 0 };
+        for (let i = 0; i + length < wlSequence.length; i++) {
+            if (wlSequence.slice(i, i + length).join("") !== candidate) continue;
+            matches++;
+            nextCounts[wlSequence[i + length]]++;
         }
+        if (matches > 0 && nextCounts.W + nextCounts.L > 0) {
+            selectedPattern = candidate;
+            selectedContinuation = nextCounts;
+            return {
+                mode: nextCounts.W >= nextCounts.L ? "NORMAL" : "RECOVERY",
+                pattern: selectedPattern,
+                continuationCounts: selectedContinuation,
+                patternLength: length,
+                patternMatches: matches,
+                selection: "most frequent W/L continuation"
+            };
+        }
+    }
+    return { mode: fallbackMode || "NORMAL", pattern: "", continuationCounts: {}, patternLength: 0, patternMatches: 0, selection: "state fallback" };
+}
+
+function buildCalculationHistory(list) {
+    const rows = [...list].sort((a, b) => {
+        const aa = BigInt(a.issueNumber), bb = BigInt(b.issueNumber);
+        return aa < bb ? -1 : aa > bb ? 1 : 0;
+    });
+    const outcomes = [];
+    for (let i = 0; i + 1 < rows.length; i++) {
+        const current = rows[i];
+        const actualNext = sizeOf(rows[i + 1]);
+        const normalPrediction = calculateNormalSize(current.issueNumber, current.number ?? current.winNumber);
+        if (!normalPrediction || !actualNext) continue;
+        outcomes.push({
+            sourcePeriod: current.issueNumber,
+            targetPeriod: rows[i + 1].issueNumber,
+            normalPrediction,
+            actual: actualNext,
+            outcome: normalPrediction === actualNext ? "W" : "L"
+        });
+    }
+    return { rows, outcomes, wlSequence: outcomes.map(item => item.outcome) };
+}
+
+function decidePrediction(list, currentLevel, userId) {
+    if (!Array.isArray(list) || list.length < 2) return null;
+    initState(userId);
+    const state = userStates[userId];
+    const latest = list[0];
+    const currentPeriod = String(latest.issueNumber);
+    const currentResult = Number(latest.number ?? latest.winNumber ?? 0);
+    if (!currentPeriod || !Number.isInteger(currentResult) || currentResult === 0) return null;
+
+    const targetPeriod = (BigInt(currentPeriod) + 1n).toString();
+    const normalPrediction = calculateNormalSize(currentPeriod, currentResult);
+    if (!normalPrediction) return null;
+
+    const history = buildCalculationHistory(list);
+    const fallbackMode = state.currentMode === "RECOVERY" ? "RECOVERY" : "NORMAL";
+    const modeInfo = chooseModeFromWL(history.wlSequence, fallbackMode);
+    const mode = modeInfo.mode;
+    const finalPrediction = mode === "RECOVERY" ? (normalPrediction === "B" ? "S" : "B") : normalPrediction;
+
+    state.currentMode = mode;
+    state.lastPrediction = finalPrediction;
+    return {
+        type: "SIZE",
+        val: finalPrediction === "B" ? "BIG" : "SMALL",
+        conf: modeInfo.patternLength > 0 ? 90 : 70,
+        pat: mode,
+        mode,
+        currentLevel: Number(currentLevel) || 1,
+        targetPeriod,
+        latestCompletedPeriod: currentPeriod,
+        referencePeriod: currentPeriod,
+        referenceValue: currentResult,
+        currentResult,
+        normalPrediction: normalPrediction === "B" ? "BIG" : "SMALL",
+        pattern: modeInfo.pattern,
+        patternLength: modeInfo.patternLength,
+        patternMatches: modeInfo.patternMatches,
+        wlHistory: history.wlSequence.join(""),
+        analyzedRows: history.rows.length,
+        analyzedCalculations: history.outcomes.length,
+        continuationCounts: modeInfo.continuationCounts,
+        selectionRule: modeInfo.selection,
+        predictionDetails: {
+            modeRule: mode === "NORMAL" ? "use calculation result" : "opposite of calculation result",
+            formula: "next period last 3 digits × exp(current result), then last digit <= 4 => SMALL else BIG",
+            currentWLPattern: modeInfo.pattern,
+            continuationCounts: modeInfo.continuationCounts
+        },
+        calculationHistory: history.outcomes
     };
 }
 //  PREDICT LOOP
@@ -874,7 +852,7 @@ async function runPredict(userId, chatId) {
     if (!next || BigInt(next) <= BigInt(list[0].issueNumber)) { scheduleRun(userId, chatId, 5000); return; }
     if(!rememberPeriod(userId, next)) { scheduleRun(userId, chatId, 2000); return; }
 
-    const signal = decidePrediction(list);
+    const signal = decidePrediction(list, st.level, userId);
     if(!signal) { scheduleRun(userId, chatId, 5000); return; }
 
     let abLine = "🤖 AutoBet: OFF";
@@ -902,11 +880,11 @@ async function runPredict(userId, chatId) {
 "║   👑 EARN WITH ME AI    ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
-"║ Signal  : "+(signal.type==="COLOR"?"🎨 "+signal.val:(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL"))+"\n"+
-"║ Type    : "+signal.type+" | Mode: "+signal.mode+"\n"+
-        "║ Ref     : "+signal.referencePeriod+" "+signal.referenceValue+"\n"+
-        "║ Pattern : "+(signal.latestPattern || "N/A")+"\n"+
-        "║ S/O     : "+signal.followingSame+"/"+signal.followingOpposite+"\n"+
+"║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
+"║ Mode    : "+signal.mode+"\n"+
+        "║ Normal  : "+signal.normalPrediction+"\n"+
+        "║ WL Pat. : "+(signal.pattern || "N/A")+"\n"+
+        "║ WL Hist.: "+(signal.wlHistory || "N/A")+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
 "╚══════════════════════════╝",
