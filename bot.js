@@ -719,13 +719,20 @@ function chooseModeFromWL(wlSequence, fallbackMode) {
         if (matches > 0 && nextCounts.W + nextCounts.L > 0) {
             selectedPattern = candidate;
             selectedContinuation = nextCounts;
+            const currentMode = fallbackMode === "RECOVERY" ? "RECOVERY" : "NORMAL";
+            const dominantOutcome = nextCounts.W >= nextCounts.L ? "W" : "L";
+            // W: stay in the current mode. L: switch to the other mode.
+            const selectedMode = dominantOutcome === "W"
+                ? currentMode
+                : (currentMode === "NORMAL" ? "RECOVERY" : "NORMAL");
             return {
-                mode: nextCounts.W >= nextCounts.L ? "NORMAL" : "RECOVERY",
+                mode: selectedMode,
                 pattern: selectedPattern,
                 continuationCounts: selectedContinuation,
+                dominantOutcome,
                 patternLength: length,
                 patternMatches: matches,
-                selection: "most frequent W/L continuation"
+                selection: dominantOutcome === "W" ? "W keeps current mode" : "L toggles mode"
             };
         }
     }
@@ -883,8 +890,6 @@ async function runPredict(userId, chatId) {
 "║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
 "║ Mode    : "+signal.mode+"\n"+
         "║ Normal  : "+signal.normalPrediction+"\n"+
-        "║ WL Pat. : "+(signal.pattern || "N/A")+"\n"+
-        "║ WL Hist.: "+(signal.wlHistory || "N/A")+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
 "╚══════════════════════════╝",
