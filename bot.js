@@ -7,7 +7,7 @@ const puppeteer   = require('puppeteer');
 // ============================================================
 //  CONFIG
 // ============================================================
-const BOT_TOKEN    = process.env.BOT_TOKEN || "8801907570:AAHdrMAbkmgckFDDb64X12t6HUANVnE95oc";
+const BOT_TOKEN    = process.env.BOT_TOKEN || "8670635800:AAEeDoWmav3IL5Pj19shmaSfTHNuLjaT9Lw";
 const OWNER_ID     = 8869874751;
 const OWNER_PASS   = process.env.OWNER_PASS || "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
