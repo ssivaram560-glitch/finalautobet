@@ -1,5 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios       = require('axios');
+const httpAgent  = new (require('http').Agent)({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8, timeout: 10000 });
+const httpsAgent = new (require('https').Agent)({ keepAlive: true, maxSockets: 32, maxFreeSockets: 8, timeout: 10000 });
+const apiClient  = axios.create({ httpAgent, httpsAgent, timeout: 10000, maxContentLength: 1024 * 1024, maxBodyLength: 1024 * 1024 });
 const crypto      = require('crypto');
 const zlib        = require('zlib');
 const puppeteer   = require('puppeteer');
@@ -36,9 +39,9 @@ http.createServer((req, res) => {
 const RENDER_URL = process.env.RENDER_URL || "";
 if (RENDER_URL) {
     setInterval(() => {
-        axios.get(RENDER_URL).catch(() => {});
+        apiClient.get(RENDER_URL).catch(() => {});
         console.log("[PING] Keep-alive ping sent");
-    }, 14 * 60 * 1000);
+    }, 14 * 60 * 1000).unref();
 }
 
 // ============================================================
@@ -64,6 +67,7 @@ let userTokens = {};
 let userStates = {};
 let loopTimers = {};
 let resultIntervals = {};
+const predictionPromises = new Map();
 const MAX_SENT_PERIODS = 1000;
 const MAX_RESULT_HISTORY = 500;
 
@@ -91,7 +95,7 @@ async function logBoth(chatId, msg, isError = false) {
 // ============================================================
 async function fetchList() {
     try {
-        const response = await axios.get(process.env.LUCIFER_API_URL || "https://luciferapi.com/", {
+        const response = await apiClient.get(process.env.LUCIFER_API_URL || "https://luciferapi.com/", {
             headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" },
             timeout: 10000
         });
@@ -144,12 +148,12 @@ async function getLiveBalance(userId, chatId = null) {
     };
 
     try {
-        const r = await axios.get(url, { headers, timeout: 5000 });
+        const r = await apiClient.get(url, { headers, timeout: 5000 });
         return await parseBalanceResponse(r);
     } catch (e) {
         if (e.response && e.response.status === 405) {
             try {
-                const r2 = await axios.post(url, {}, { headers, timeout: 5000 });
+                const r2 = await apiClient.post(url, {}, { headers, timeout: 5000 });
                 return await parseBalanceResponse(r2);
             } catch (e2) {
                 const errMsg = e2.response?.data?.msg || e2.message || "API Error";
@@ -205,17 +209,21 @@ function sleep(ms)      { return new Promise(r => setTimeout(r, ms)); }
 function getToken(id)   { return userTokens[id] || GLOBAL_TOKEN || ""; }
 
 function scheduleRun(userId, chatId, delayMs) {
+    if (!running[userId]) return;
     if (loopTimers[userId]) clearTimeout(loopTimers[userId]);
-    loopTimers[userId] = setTimeout(() => {
+    const timer = setTimeout(() => {
+        if (loopTimers[userId] !== timer) return;
         loopTimers[userId] = null;
-        if (running[userId]) runPredict(userId, chatId);
-    }, delayMs);
+        if (running[userId] && !predictionPromises.has(userId)) runPredict(userId, chatId);
+    }, Math.max(250, delayMs));
+    timer.unref?.();
+    loopTimers[userId] = timer;
 }
 
 function clearUserTimers(userId) {
     if (loopTimers[userId]) clearTimeout(loopTimers[userId]);
     loopTimers[userId] = null;
-    if (resultIntervals[userId]) clearInterval(resultIntervals[userId]);
+    if (resultIntervals[userId]) clearTimeout(resultIntervals[userId]);
     resultIntervals[userId] = null;
 }
 
@@ -318,7 +326,7 @@ function makeBetSign(params) {
 // ============================================================
 async function fetchCaptcha() {
     try {
-        const r = await axios.get(CAPTCHA_URL, {
+        const r = await apiClient.get(CAPTCHA_URL, {
             headers: {
                 "Accept": "application/json, text/plain, */*",
                 "Origin": "https://bdgwin8.vip",
@@ -498,7 +506,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level) {
             const timestamp = Math.floor(Date.now() / 1000);
             const payload   = {...params, signature, timestamp};
 
-            const r = await axios.post(BET_URL, payload, {
+            const r = await apiClient.post(BET_URL, payload, {
                 headers: {
                     "authorization":    "Bearer " + token,
                     "content-type":     "application/json",
@@ -674,7 +682,7 @@ function getStatus(userId) {
     return `${state.currentMode || "SAME"} MODE | L${st?.level || 1} | History: ${state.resultHistory.join("")}`;
 }
 
-//  CALCULATION + W/L MODE PREDICTION ENGINE
+//  CALCULATION + WINNING-MODE W/L PATTERN ENGINE
 // ============================================================
 function normalizeSize(value) {
     const v = String(value || "").toUpperCase();
@@ -693,7 +701,7 @@ function nextIssueNumber(list) {
 
 function calculateNormalSize(period, currentNumber) {
     const n = Number(currentNumber);
-    if (!Number.isInteger(n) || n < 0 || n > 9 || n === 0) return null;
+    if (!Number.isInteger(n) || n < 0 || n > 9) return null;
     const nextLast3 = Number(String(BigInt(period) + 1n).slice(-3));
     const answer = nextLast3 * Math.exp(n);
     const noDecimal = answer.toString().replace(".", "");
@@ -703,82 +711,117 @@ function calculateNormalSize(period, currentNumber) {
     return lastDigit <= 4 ? "S" : "B";
 }
 
-function chooseModeFromWL(wlSequence, fallbackMode) {
-    if (!Array.isArray(wlSequence) || !wlSequence.length) return { mode: fallbackMode || "NORMAL", pattern: "", continuationCounts: {}, patternLength: 0, patternMatches: 0 };
-    let selectedPattern = null;
-    let selectedContinuation = null;
-    for (let length = wlSequence.length; length >= 1; length--) {
-        const candidate = wlSequence.slice(-length).join("");
-        let matches = 0;
-        const nextCounts = { W: 0, L: 0 };
-        for (let i = 0; i + length < wlSequence.length; i++) {
-            if (wlSequence.slice(i, i + length).join("") !== candidate) continue;
-            matches++;
-            nextCounts[wlSequence[i + length]]++;
-        }
-        if (matches > 0 && nextCounts.W + nextCounts.L > 0) {
-            selectedPattern = candidate;
-            selectedContinuation = nextCounts;
-            const currentMode = fallbackMode === "RECOVERY" ? "RECOVERY" : "NORMAL";
-            const dominantOutcome = nextCounts.W >= nextCounts.L ? "W" : "L";
-            // W: stay in the current mode. L: switch to the other mode.
-            const selectedMode = dominantOutcome === "W"
-                ? currentMode
-                : (currentMode === "NORMAL" ? "RECOVERY" : "NORMAL");
-            return {
-                mode: selectedMode,
-                pattern: selectedPattern,
-                continuationCounts: selectedContinuation,
-                dominantOutcome,
-                patternLength: length,
-                patternMatches: matches,
-                selection: dominantOutcome === "W" ? "W keeps current mode" : "L toggles mode"
-            };
-        }
-    }
-    return { mode: fallbackMode || "NORMAL", pattern: "", continuationCounts: {}, patternLength: 0, patternMatches: 0, selection: "state fallback" };
+function oppositeSize(value) {
+    return value === "B" ? "S" : "B";
 }
 
-function buildCalculationHistory(list) {
-    const rows = [...list].sort((a, b) => {
+function buildWinningModeHistory(list) {
+    const rows = [...list].slice(0, MAX_RESULT_HISTORY).sort((a, b) => {
         const aa = BigInt(a.issueNumber), bb = BigInt(b.issueNumber);
         return aa < bb ? -1 : aa > bb ? 1 : 0;
     });
-    const outcomes = [];
+    const records = [];
     for (let i = 0; i + 1 < rows.length; i++) {
         const current = rows[i];
-        const actualNext = sizeOf(rows[i + 1]);
-        const normalPrediction = calculateNormalSize(current.issueNumber, current.number ?? current.winNumber);
-        if (!normalPrediction || !actualNext) continue;
-        outcomes.push({
-            sourcePeriod: current.issueNumber,
-            targetPeriod: rows[i + 1].issueNumber,
-            normalPrediction,
-            actual: actualNext,
-            outcome: normalPrediction === actualNext ? "W" : "L"
+        const next = rows[i + 1];
+        const currentNumber = Number(current.number ?? current.winNumber ?? 0);
+        const actual = sizeOf(next);
+        const normal = calculateNormalSize(current.issueNumber, currentNumber);
+        if (!normal || !actual) continue;
+        records.push({
+            sourcePeriod: String(current.issueNumber),
+            targetPeriod: String(next.issueNumber),
+            normalPrediction: normal,
+            actual
         });
     }
-    return { rows, outcomes, wlSequence: outcomes.map(item => item.outcome) };
+    return { rows, records, wlSequence: records.map(record => record.actual === record.normalPrediction ? "W" : "L") };
 }
 
-function decidePrediction(list, currentLevel, userId) {
+// The existing UI names are intentionally preserved: NORMAL uses the recovery/opposite
+// branch and RECOVERY uses the direct normal branch. Both are evaluated independently.
+function predictionForMode(mode, normalPrediction) {
+    return mode === "NORMAL" ? oppositeSize(normalPrediction) : normalPrediction;
+}
+
+function evaluateMode(records, mode, windowSize = 60) {
+    const sample = records.slice(-windowSize);
+    let wins = 0;
+    let weightedWins = 0;
+    let weightedTotal = 0;
+    let recentWins = 0;
+    const n = sample.length;
+    for (let i = 0; i < n; i++) {
+        const row = sample[i];
+        const prediction = predictionForMode(mode, row.normalPrediction);
+        const win = prediction === row.actual;
+        if (win) wins++;
+        if (i >= Math.max(0, n - 10) && win) recentWins++;
+        const weight = i + 1;
+        weightedTotal += weight;
+        if (win) weightedWins += weight;
+    }
+    return {
+        mode,
+        samples: n,
+        wins,
+        losses: n - wins,
+        accuracy: n ? wins / n : 0,
+        weightedAccuracy: weightedTotal ? weightedWins / weightedTotal : 0,
+        recentAccuracy: Math.min(n, 10) ? recentWins / Math.min(n, 10) : 0
+    };
+}
+
+function analyzeModePattern(records, mode, maxLength = 12) {
+    const outcomes = records.map(row => predictionForMode(mode, row.normalPrediction) === row.actual ? "W" : "L");
+    const limit = Math.min(maxLength, outcomes.length - 1);
+    for (let length = limit; length >= 2; length--) {
+        const latest = outcomes.slice(-length).join("");
+        const continuations = [];
+        for (let i = 0; i + length < outcomes.length - 1; i++) {
+            if (outcomes.slice(i, i + length).join("") === latest) continuations.push(outcomes[i + length]);
+        }
+        if (continuations.length) {
+            const wins = continuations.filter(x => x === "W").length;
+            return { mode, pattern: latest, patternLength: length, matches: continuations.length, wins, losses: continuations.length - wins, accuracy: wins / continuations.length };
+        }
+    }
+    const recent = outcomes.slice(-Math.min(20, outcomes.length));
+    const wins = recent.filter(x => x === "W").length;
+    return { mode, pattern: recent.join(""), patternLength: 0, matches: recent.length, wins, losses: recent.length - wins, accuracy: recent.length ? wins / recent.length : 0 };
+}
+
+function chooseWinningModeFromPattern(records, fallbackMode) {
+    const fallback = fallbackMode === "RECOVERY" ? "RECOVERY" : "NORMAL";
+    if (!Array.isArray(records) || records.length < 8) return { mode: fallback, pattern: "", patternLength: 0, patternMatches: 0, winningModeCounts: { NORMAL: 0, RECOVERY: 0 }, continuationModeCounts: { NORMAL: 0, RECOVERY: 0 }, modeScores: {}, selection: "fallback until 8 valid samples" };
+    const normal = analyzeModePattern(records, "NORMAL");
+    const recovery = analyzeModePattern(records, "RECOVERY");
+    const scores = { NORMAL: normal, RECOVERY: recovery };
+    let mode = fallback;
+    if (normal.matches && recovery.matches && normal.accuracy !== recovery.accuracy) mode = normal.accuracy > recovery.accuracy ? "NORMAL" : "RECOVERY";
+    else if (normal.matches !== recovery.matches) mode = normal.matches > recovery.matches ? "NORMAL" : "RECOVERY";
+    else if (normal.wins !== recovery.wins) mode = normal.wins > recovery.wins ? "NORMAL" : "RECOVERY";
+    const selected = scores[mode];
+    return { mode, pattern: selected.pattern, patternLength: selected.patternLength, patternMatches: selected.matches, winningModeCounts: { NORMAL: normal.wins, RECOVERY: recovery.wins }, continuationModeCounts: { NORMAL: normal.matches, RECOVERY: recovery.matches }, modeScores: scores, selection: `latest recurring pattern selected ${mode}; ${selected.pattern || "no repeated pattern"}` };
+}
+async function decidePrediction(list, currentLevel, userId) {
     if (!Array.isArray(list) || list.length < 2) return null;
     initState(userId);
     const state = userStates[userId];
     const latest = list[0];
     const currentPeriod = String(latest.issueNumber);
-    const currentResult = Number(latest.number ?? latest.winNumber ?? 0);
-    if (!currentPeriod || !Number.isInteger(currentResult) || currentResult === 0) return null;
+    const currentNumber = Number(latest.number ?? latest.winNumber ?? 0);
+    if (!currentPeriod || !Number.isInteger(currentNumber)) return null;
 
     const targetPeriod = (BigInt(currentPeriod) + 1n).toString();
-    const normalPrediction = calculateNormalSize(currentPeriod, currentResult);
+    const normalPrediction = calculateNormalSize(currentPeriod, currentNumber);
     if (!normalPrediction) return null;
 
-    const history = buildCalculationHistory(list);
+    const history = buildWinningModeHistory(list);
     const fallbackMode = state.currentMode === "RECOVERY" ? "RECOVERY" : "NORMAL";
-    const modeInfo = chooseModeFromWL(history.wlSequence, fallbackMode);
+    const modeInfo = chooseWinningModeFromPattern(history.records, fallbackMode);
     const mode = modeInfo.mode;
-    const finalPrediction = mode === "RECOVERY" ? (normalPrediction === "B" ? "S" : "B") : normalPrediction;
+    const finalPrediction = predictionForMode(mode, normalPrediction);
 
     state.currentMode = mode;
     state.lastPrediction = finalPrediction;
@@ -792,24 +835,25 @@ function decidePrediction(list, currentLevel, userId) {
         targetPeriod,
         latestCompletedPeriod: currentPeriod,
         referencePeriod: currentPeriod,
-        referenceValue: currentResult,
-        currentResult,
+        referenceValue: currentNumber,
+        currentResult: currentNumber,
         normalPrediction: normalPrediction === "B" ? "BIG" : "SMALL",
         pattern: modeInfo.pattern,
         patternLength: modeInfo.patternLength,
         patternMatches: modeInfo.patternMatches,
         wlHistory: history.wlSequence.join(""),
         analyzedRows: history.rows.length,
-        analyzedCalculations: history.outcomes.length,
-        continuationCounts: modeInfo.continuationCounts,
+        analyzedCalculations: history.records.length,
+        winningModeCounts: modeInfo.winningModeCounts,
+        continuationModeCounts: modeInfo.continuationModeCounts || {},
         selectionRule: modeInfo.selection,
         predictionDetails: {
-            modeRule: mode === "NORMAL" ? "use calculation result" : "opposite of calculation result",
+            modeRule: mode === "NORMAL" ? "use recovery opposite because NORMAL mode was selected" : "use normal calculation because RECOVERY mode was selected",
             formula: "next period last 3 digits × exp(current result), then last digit <= 4 => SMALL else BIG",
             currentWLPattern: modeInfo.pattern,
-            continuationCounts: modeInfo.continuationCounts
+            winningModeCounts: modeInfo.winningModeCounts
         },
-        calculationHistory: history.outcomes
+        calculationHistory: history.records
     };
 }
 //  PREDICT LOOP
@@ -835,6 +879,13 @@ function stk(arr, key) {
     return { val, count };
 }
 async function runPredict(userId, chatId) {
+    if (!running[userId] || predictionPromises.has(userId)) return;
+    const task = runPredictOnce(userId, chatId);
+    predictionPromises.set(userId, task);
+    try { return await task; } finally { if (predictionPromises.get(userId) === task) predictionPromises.delete(userId); }
+}
+
+async function runPredictOnce(userId, chatId) {
     if(!running[userId]) return;
     initUser(userId);
     const state = userStates[userId];
@@ -857,10 +908,9 @@ async function runPredict(userId, chatId) {
 
     const next = nextIssueNumber(list);
     if (!next || BigInt(next) <= BigInt(list[0].issueNumber)) { scheduleRun(userId, chatId, 5000); return; }
-    if(!rememberPeriod(userId, next)) { scheduleRun(userId, chatId, 2000); return; }
-
-    const signal = decidePrediction(list, st.level, userId);
+    const signal = await decidePrediction(list, st.level, userId);
     if(!signal) { scheduleRun(userId, chatId, 5000); return; }
+    if(!rememberPeriod(userId, next)) { scheduleRun(userId, chatId, 2000); return; }
 
     let abLine = "🤖 AutoBet: OFF";
     let canBet = false;
@@ -916,90 +966,53 @@ async function runPredict(userId, chatId) {
 
 // 4. checkResult - Robust Update & Full UI
 async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
+    if (resultIntervals[userId]) clearTimeout(resultIntervals[userId]);
     let tries = 0;
-    const cfg = autobetCfg[userId];
-    const st = autobetState[userId];
-    const pt = profitTrack[userId];
-    
-    if (resultIntervals[userId]) clearInterval(resultIntervals[userId]);
-    const iv = setInterval(async () => {
-        if (!running[userId]) { clearInterval(iv); resultIntervals[userId] = null; return; }
+    const poll = async () => {
+        if (!running[userId]) { resultIntervals[userId] = null; return; }
         if (++tries > 25) {
-            clearInterval(iv); resultIntervals[userId] = null;
+            resultIntervals[userId] = null;
             await logBoth(chatId, "⏱ Timeout — checking next period...");
             scheduleRun(userId, chatId, 3000);
             return;
         }
-        const list = await fetchList(); if (!list) return;
-        if (BigInt(list[0].issueNumber) < BigInt(target)) return;
-        clearInterval(iv); resultIntervals[userId] = null;
-
-        const res = list.find(i => i.issueNumber === target) || list[0];
-        const num = parseInt(res.number || res.winNumber || 0);
-        let actual;
-        if (predType === "SIZE") actual = num >= 5 ? "BIG" : "SMALL";
-        else actual = num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN";
-        
-        const win = predicted === actual;
-        const betLevel = st.level; // Save current level before update
-
-        // UPDATE LOGIC (Passing betPlaced to fix L1 repetition)
-        updateAfterResult(userId, win, actual, betPlaced);
-
-        const s = stats[userId];
-        s.total++;
-        if (win) {
-            s.win++; s.winStreak++; s.lossStreak = 0;
-            if (s.winStreak > s.maxWinStreak) s.maxWinStreak = s.winStreak;
-        } else {
-            s.loss++; s.lossStreak++; s.winStreak = 0;
-            if (s.lossStreak > s.maxLossStreak) s.maxLossStreak = s.lossStreak;
-        }
-
-        if (betPlaced) {
-            // BET RESULT DASHBOARD
-            if (win) await handleWin(userId, chatId, actual, num, betLevel);
-            else await handleLoss(userId, chatId, actual, num, betLevel);
-
-            // Profit Check
-            const targetProfit = Number(cfg.targetProfit) || 1000;
-            if (pt.pnl >= targetProfit) {
-                st.isWaiting = true;
-                st.nextStartTime = Date.now() + (Number(cfg.restartDelay) || 1) * 60 * 1000;
-                await send(chatId, "🎯 TARGET REACHED! Bot Paused.");
+        try {
+            const list = await fetchList();
+            if (!list || BigInt(list[0].issueNumber) < BigInt(target)) {
+                const t = setTimeout(poll, 10000); t.unref?.(); resultIntervals[userId] = t; return;
             }
-        } else {
-            // WATCH RESULT DASHBOARD (Full details as requested)
-            if (win) {
-                await send(chatId, 
-                    "╔══════════════════════════╗\n"+
-                    "║  👀 WATCH RESULT: WIN! ✅ ║\n"+
-                    "╠══════════════════════════╣\n"+
-                    "║ Number : "+num+"\n"+
-                    "║ Result : "+actual+"\n"+
-                    "║ Status : Correct Prediction\n"+
-                    "╚══════════════════════════╝"
-                );
-                await sendSticker(chatId, WIN_STICKER);
+            const res = list.find(i => i.issueNumber === target);
+            if (!res) {
+                const t = setTimeout(poll, 10000); t.unref?.(); resultIntervals[userId] = t; return;
+            }
+            resultIntervals[userId] = null;
+            const num = Number(res.number ?? res.winNumber);
+            if (!Number.isInteger(num) || num < 0 || num > 9) { scheduleRun(userId, chatId, 3000); return; }
+            const actual = predType === "SIZE" ? (num >= 5 ? "BIG" : "SMALL") : (num === 0 ? "RED" : num === 5 ? "GREEN" : num % 2 === 0 ? "RED" : "GREEN");
+            const win = predicted === actual;
+            const st = autobetState[userId], cfg = autobetCfg[userId], pt = profitTrack[userId];
+            const betLevel = st.level;
+            updateAfterResult(userId, win, actual, betPlaced);
+            const statsRow = stats[userId];
+            statsRow.total++;
+            if (win) { statsRow.win++; statsRow.winStreak++; statsRow.lossStreak = 0; statsRow.maxWinStreak = Math.max(statsRow.maxWinStreak, statsRow.winStreak); }
+            else { statsRow.loss++; statsRow.lossStreak++; statsRow.winStreak = 0; statsRow.maxLossStreak = Math.max(statsRow.maxLossStreak, statsRow.lossStreak); }
+            if (betPlaced) {
+                if (win) await handleWin(userId, chatId, actual, num, betLevel); else await handleLoss(userId, chatId, actual, num, betLevel);
+                const targetProfit = Number(cfg.targetProfit) || 1000;
+                if (pt.pnl >= targetProfit) { st.isWaiting = true; st.nextStartTime = Date.now() + (Number(cfg.restartDelay) || 1) * 60000; await send(chatId, "🎯 TARGET REACHED! Bot Paused."); }
             } else {
-                await send(chatId, 
-                    "╔══════════════════════════╗\n"+
-                    "║  👀 WATCH RESULT: LOSS ❌ ║\n"+
-                    "╠══════════════════════════╣\n"+
-                    "║ Number : "+num+"\n"+
-                    "║ Result : "+actual+"\n"+
-                    "║ Status : Incorrect Prediction\n"+
-                    "╚══════════════════════════╝"
-                );
-                await sendSticker(chatId, LOSS_STICKER);
+                await send(chatId, `👀 WATCH RESULT: ${win ? "WIN! ✅" : "LOSS ❌"}\nNumber: ${num}\nResult: ${actual}`);
+                await sendSticker(chatId, win ? WIN_STICKER : LOSS_STICKER);
             }
+            scheduleRun(userId, chatId, 8000);
+        } catch (err) {
+            console.error('[RESULT CHECK]', err.message);
+            const t = setTimeout(poll, 10000); t.unref?.(); resultIntervals[userId] = t;
         }
-
-        scheduleRun(userId, chatId, 8000);
-    }, 10000);
-    resultIntervals[userId] = iv;
+    };
+    await poll();
 }
-
 
 // ============================================================
 //  STATS
@@ -1418,7 +1431,7 @@ if(text==="🔢 Set Watch Losses"){
             if(running[id])return send(msg.chat.id,"⚠️ Already running!");
 
             running[id]=true;sentPeriods[id]=new Set();
-            autobetState[id]={level:1,consecutiveLoss:0,inMart:false};
+            autobetState[id]={level:1,consecutiveLoss:0,inMart:false,isWaiting:false,nextStartTime:null};
 
             // Load previous B/S history from API
             const prevList = await fetchList();
@@ -1438,7 +1451,7 @@ if(text==="🔢 Set Watch Losses"){
             );
             runPredict(id,msg.chat.id);
         }
-        if(text==="🛑 Stop")   { running[id]=false; clearUserTimers(id); sentPeriods[id]?.clear(); send(msg.chat.id,"🛑 Stopped."); }
+        if(text==="🛑 Stop")   { running[id]=false; clearUserTimers(id); predictionPromises.delete(id); sentPeriods[id]?.clear(); send(msg.chat.id,"🛑 Stopped."); }
         if(text==="📊 Stats")  showStats(msg.chat.id,id);
         if(text==="💰 Profit") profitReport(msg.chat.id,id);
         if(text==="📩 Contact") send(msg.chat.id,"📩 "+ADMIN_HANDLE+"\nID: "+id);
