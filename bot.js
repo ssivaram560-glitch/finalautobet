@@ -952,17 +952,79 @@ async function runPredictOnce(userId, chatId) {
         if (result && result.ok) {
             betPlaced = true;
             await send(chatId, "✅ Bet Success! ₹" + result.amt + " L" + st.level + "\n⏳ Checking result...");
-        } else if (result && !result.ok) {
-            await send(chatId, "❌ Bet Failed: " + (result.msg || "Unknown error"));
+        } else {
+            await send(chatId, "❌ Bet Failed. This period will not update the Martingale level.");
+            scheduleRun(userId, chatId, 3000);
+            return;
         }
     }
 
-    checkResult(userId, chatId, next, signal.val, signal.type, betPlaced);
+    await checkResult(userId, chatId, next, signal.val, signal.type, betPlaced);
 }
+// ============================================================
+//  RESULT HANDLERS
+// ============================================================
+function getBetAmount(userId, level) {
+    initUser(userId);
+    const cfg = autobetCfg[userId];
+    const custom = Number(cfg.customBets?.[level - 1]);
+    if (Number.isFinite(custom) && custom > 0) return custom;
+
+    const base = Number(cfg.baseBet) || 1;
+    const multiplier = Number(MULT[level - 1]);
+    return base * (Number.isFinite(multiplier) ? multiplier : 1);
+}
+
+async function handleWin(userId, chatId, actual, num, level) {
+    initUser(userId);
+    const pt = profitTrack[userId];
+    const amount = getBetAmount(userId, level);
+
+    pt.totalBets += 1;
+    pt.wins += 1;
+    pt.totalBetAmount += amount;
+    pt.pnl += amount;
+    pt.winStreak += 1;
+    pt.lossStreak = 0;
+    pt.maxW = Math.max(pt.maxW, pt.winStreak);
+
+    await send(chatId,
+        `✅ WIN | L${level}\n` +
+        `Number: ${num}\n` +
+        `Result: ${actual}\n` +
+        `Profit: ₹${amount}\n` +
+        `Next Level: L${autobetState[userId].level}`
+    );
+    await sendSticker(chatId, WIN_STICKER);
+}
+
+async function handleLoss(userId, chatId, actual, num, level) {
+    initUser(userId);
+    const pt = profitTrack[userId];
+    const amount = getBetAmount(userId, level);
+    const nextLevel = autobetState[userId].level;
+
+    pt.totalBets += 1;
+    pt.losses += 1;
+    pt.totalBetAmount += amount;
+    pt.pnl -= amount;
+    pt.lossStreak += 1;
+    pt.winStreak = 0;
+    pt.maxL = Math.max(pt.maxL, pt.lossStreak);
+
+    await send(chatId,
+        `❌ LOSS | L${level}\n` +
+        `Number: ${num}\n` +
+        `Result: ${actual}\n` +
+        `Loss: ₹${amount}\n` +
+        `Next Level: L${nextLevel}`
+    );
+    await sendSticker(chatId, LOSS_STICKER);
+}
+
 // ============================================================
 //  RESULT CHECKER
 // ============================================================
-
 
 // 4. checkResult - Robust Update & Full UI
 async function checkResult(userId, chatId, target, predicted, predType, betPlaced) {
@@ -978,7 +1040,7 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
         }
         try {
             const list = await fetchList();
-            if (!list || BigInt(list[0].issueNumber) < BigInt(target)) {
+            if (!Array.isArray(list) || !list.length || !list[0]?.issueNumber || BigInt(list[0].issueNumber) < BigInt(target)) {
                 const t = setTimeout(poll, 10000); t.unref?.(); resultIntervals[userId] = t; return;
             }
             const res = list.find(i => i.issueNumber === target);
