@@ -923,7 +923,7 @@ function initUser(id) {
         numberLevelHistory: {},
         // SIZE mode only: once an opposite-side bet wins, keep that side
         // until the next SIZE loss.
-        sizeStickySide: null,
+        sizeStrategyMode: "PATTERN",
         sizePatternPrediction: null
     };
     if (!autobetState[id].levelHistory || typeof autobetState[id].levelHistory !== "object") autobetState[id].levelHistory = {};
@@ -1726,16 +1726,17 @@ async function decidePrediction(_list, currentPeriod, userId) {
         }
 
         const st = autobetState[userId];
-        // Save the fresh pattern result separately.  The selected side may be
-        // sticky after a previous loss, but the pattern remains the reference.
+        // SIZE mode has two strategy states. Start with PATTERN; after a loss,
+        // switch to OPPOSITE. Stay in the winning state until the next loss.
         st.sizePatternPrediction = predictedSize;
-        const selectedSize = st.sizeStickySide || predictedSize;
+        const strategyMode = st.sizeStrategyMode === "OPPOSITE" ? "OPPOSITE" : "PATTERN";
+        const selectedSize = strategyMode === "OPPOSITE"
+            ? (predictedSize === "BIG" ? "SMALL" : "BIG")
+            : predictedSize;
 
         userStates[userId].lastPrediction = selectedSize;
         userStates[userId].lastNumber = null;
-        userStates[userId].lastReason = st.sizeStickySide
-            ? `16-combination pattern=${predictedSize}; sticky=${selectedSize}`
-            : '16-combination color + size rule';
+        userStates[userId].lastReason = `16-combination ${strategyMode}; pattern=${predictedSize}`;
 
         return {
             type: 'SIZE',
@@ -1792,13 +1793,13 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
                 st.lastWinMode = cfg.mode || "SIZE";
                 st.level = 1;
                 st.consecutiveLoss = 0;
-                // In SIZE mode, a winning sticky opposite stays active.
-                // A normal pattern win leaves sticky mode inactive.
+                // Stay in the same SIZE strategy after a win.
             } else {
                 st.consecutiveLoss++;
                 st.level = st.level >= cfg.maxLvl ? 1 : st.level + 1;
-                if (cfg.mode === "SIZE" && st.sizePatternPrediction) {
-                    st.sizeStickySide = st.sizePatternPrediction === "BIG" ? "SMALL" : "BIG";
+                // A loss is the only event that changes the SIZE strategy.
+                if (cfg.mode === "SIZE") {
+                    st.sizeStrategyMode = st.sizeStrategyMode === "OPPOSITE" ? "PATTERN" : "OPPOSITE";
                 }
             }
         } else if (cfg.watch) {
@@ -2751,6 +2752,7 @@ function addHandlers(){
             delete userAction[id];
             autobetCfg[id].mode="SIZE";
             autobetState[id].level = autobetState[id].sizeLevel || 1;
+            autobetState[id].sizeStrategyMode = "PATTERN";
             return send(id,"✅ Mode set: BIG/SMALL\nCategory bet enabled.",{reply_markup:autobetMenu});
         }
         if(text==="🔢 Mode: Number"){
@@ -2873,7 +2875,7 @@ if(text==="🔢 Set Watch Losses"){
             running[id]=true;sentPeriods[id]=new Set();
             predictionDispatches.set(String(id), new Set());
             settledPeriods.delete(String(id));
-            autobetState[id]={...(autobetState[id]||{}),level:1,sizeLevel:1,numberLevel:1,consecutiveLoss:0,inMart:false,lastWinLevel:null,lastWinMode:null,sizeStickySide:null,sizePatternPrediction:null};
+            autobetState[id]={...(autobetState[id]||{}),level:1,sizeLevel:1,numberLevel:1,consecutiveLoss:0,inMart:false,lastWinLevel:null,lastWinMode:null,sizeStrategyMode:"PATTERN",sizePatternPrediction:null};
 
             // Load previous B/S history from API
             const prevList = await fetchList();
