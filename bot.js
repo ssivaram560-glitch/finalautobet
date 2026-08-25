@@ -931,6 +931,8 @@ function initUser(id) {
     if (!Number.isInteger(autobetState[id].numberLevel) || autobetState[id].numberLevel < 1) autobetState[id].numberLevel = autobetState[id].level || 1;
     if (!autobetState[id].sizeLevelHistory || typeof autobetState[id].sizeLevelHistory !== "object") autobetState[id].sizeLevelHistory = {};
     if (!autobetState[id].numberLevelHistory || typeof autobetState[id].numberLevelHistory !== "object") autobetState[id].numberLevelHistory = {};
+    if (autobetState[id].sizeStrategyMode !== "PATTERN" && autobetState[id].sizeStrategyMode !== "OPPOSITE") autobetState[id].sizeStrategyMode = "PATTERN";
+    if (!Object.prototype.hasOwnProperty.call(autobetState[id], "sizePatternPrediction")) autobetState[id].sizePatternPrediction = null;
     if (!profitTrack[id])  profitTrack[id]  = { totalBets:0, wins:0, losses:0, pnl:0, winStreak:0, lossStreak:0, maxW:0, maxL:0, totalBetAmount: 0 };
 }
 
@@ -1742,7 +1744,8 @@ async function decidePrediction(_list, currentPeriod, userId) {
             type: 'SIZE',
             val: selectedSize,
             pat: '16-COMBINATION',
-            patternVal: predictedSize
+            patternVal: predictedSize,
+            strategyMode
         };
     }
 
@@ -1782,11 +1785,19 @@ async function decidePrediction(_list, currentPeriod, userId) {
         ]
     };
 }
-function updateAfterResult(userId, wasWin, actual, betPlaced) {
+function updateAfterResult(userId, wasWin, actual, betPlaced, usedStrategyMode = null) {
     initUser(userId);
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
         const st = autobetState[userId];
         const cfg = autobetCfg[userId] || {};
+        // SIZE strategy state is driven by the prediction result itself, even
+        // in WATCH mode where no real bet was placed. The period carries the
+        // exact strategy that generated its prediction.
+        if (cfg.mode === "SIZE" && (usedStrategyMode === "PATTERN" || usedStrategyMode === "OPPOSITE")) {
+            st.sizeStrategyMode = wasWin
+                ? usedStrategyMode
+                : (usedStrategyMode === "OPPOSITE" ? "PATTERN" : "OPPOSITE");
+        }
         if (betPlaced) {
             if (wasWin) {
                 st.lastWinLevel = st.level;
@@ -1797,10 +1808,8 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
             } else {
                 st.consecutiveLoss++;
                 st.level = st.level >= cfg.maxLvl ? 1 : st.level + 1;
-                // A loss is the only event that changes the SIZE strategy.
-                if (cfg.mode === "SIZE") {
-                    st.sizeStrategyMode = st.sizeStrategyMode === "OPPOSITE" ? "PATTERN" : "OPPOSITE";
-                }
+                // Strategy was already transitioned above using the exact
+                // strategy that generated this period.
             }
         } else if (cfg.watch) {
             st.consecutiveLoss = wasWin ? 0 : st.consecutiveLoss + 1;
@@ -2043,7 +2052,7 @@ waitLine+"\n"+
             if (result && result.ok) {
                 // Preserve the exact level used for this request.  Settlement must
                 // never read a possibly-updated global level later.
-                placedBets.push({ ...spec, amt: result.amt, level: levelForBet });
+                placedBets.push({ ...spec, amt: result.amt, level: levelForBet, strategyMode: signal.strategyMode });
             }
             else await send(chatId, "❌ Bet Failed (" + spec.type + "): " + (result?.msg || "Unknown error"));
         }
@@ -2053,7 +2062,7 @@ waitLine+"\n"+
     }
 
     // Pass the signal bets separately so WATCH mode can evaluate predictions even when AutoBet is OFF.
-    const rawPredictedBets = signal.bets || [{ type: signal.type, val: signal.val, kind: signal.type === "NUMBER" ? "number" : "size" }];
+    const rawPredictedBets = signal.bets || [{ type: signal.type, val: signal.val, kind: signal.type === "NUMBER" ? "number" : "size", strategyMode: signal.strategyMode }];
     const predictedBets = rawPredictedBets.filter(spec => spec.type === "SIZE" || spec.type === "NUMBER");
     checkResult(userId, chatId, next, signal.val, signal.type, placedBets, predictedBets);
     runInFlight.delete(runKey);
@@ -2134,6 +2143,7 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         // In WATCH mode, evaluate the original signal because no placed-bets array exists.
         // Colors are ignored; a category OR exact-number match is a WIN.
         const evaluationBets = betPlaced ? bets : (Array.isArray(predictedBets) ? predictedBets : []);
+        const selectedSizeStrategy = evaluationBets.find(b => b.type === "SIZE")?.strategyMode;
         const sizeMatched = evaluationBets.some(b => b.type === "SIZE" && b.val === actualSize);
         const numberMatched = evaluationBets.some(b => b.type === "NUMBER" && Number(b.val) === num);
         const isCombinedBet = evaluationBets.some(b => b.type === "SIZE") && evaluationBets.some(b => b.type === "NUMBER");
@@ -2154,7 +2164,7 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         }
 
         if (isCombinedBet) updateCombinedAfterResult(userId, sizeMatched, numberMatched, betPlaced);
-        else updateAfterResult(userId, win, actualSize, betPlaced);
+        else updateAfterResult(userId, win, actualSize, betPlaced, selectedSizeStrategy);
 
         const s = stats[userId];
         if (betPlaced) {
