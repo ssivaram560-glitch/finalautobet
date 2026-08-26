@@ -584,7 +584,7 @@ const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YV
 const BET_URL     = "https://api.ar-lottery01.com/api/Lottery/WinGoBet";
 const LOGIN_URL   = "https://13llottery.com/api/Home/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
-const DRAW_URL    = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+const DRAW_URL    = process.env.DRAW_URL || "https://luciferapi.com/";
 const SITE_URL    = "https://v0-happyai5l.vercel.app/";
 const CHROME_ARGS = [
     '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu',
@@ -833,11 +833,23 @@ async function fetchList() {
             timeout: 10000,
             validateStatus: status => status >= 200 && status < 300
         });
-        if (!(response.data && response.data.data && Array.isArray(response.data.data.list))) {
-            console.error("[FETCH LIST ERROR] WinGo response was not a list");
+        const payload = response.data;
+        const list = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.data)
+                ? payload.data
+                : Array.isArray(payload?.data?.list)
+                    ? payload.data.list
+                    : Array.isArray(payload?.results)
+                        ? payload.results
+                        : Array.isArray(payload?.list)
+                            ? payload.list
+                            : null;
+        if (!list) {
+            console.error("[FETCH LIST ERROR] Luciferapi response did not contain a result list");
             return null;
         }
-        return response.data.data.list;
+        return list;
     } catch (error) {
         console.error("[FETCH LIST ERROR]", error.message);
         return null;
@@ -1678,74 +1690,156 @@ function oppositeNumberForSize(size) {
     return null;
 }
 
-// Big/Small mode only:
-// DRAW_URL returns newest first. Therefore list[1] is the first/older
-// combination and list[0] is the second/newer combination.
-function predictSizeFromTwoDraws(list) {
-    if (!Array.isArray(list) || list.length < 2) return null;
+// ============================================================
+// PYTHON-STYLE LOCAL PREDICTION ENGINE
+// ============================================================
+// fetchList() returns newest first: nums[0] is the latest result.
+function historyNumbers(list, limit = 1000) {
+    if (!Array.isArray(list)) return [];
+    return list.slice(0, limit).map(item => {
+        const raw = item?.number ?? item?.winNumber ?? item?.result_number ?? item?.num ?? item?.value;
+        const n = Number.parseInt(raw, 10);
+        return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null;
+    }).filter(n => n !== null);
+}
 
-    const first = parseItem(list[1]);
-    const second = parseItem(list[0]);
-    if (![first, second].every(item => Number.isInteger(item.n) && item.n >= 0 && item.n <= 9)) {
-        return null;
+function isBig(n) { return n >= 5; }
+function sideOf(n) { return isBig(n) ? 'BIG' : 'SMALL'; }
+function sideNumbers(side) { return side === 'BIG' ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4]; }
+function pct(n, d) { return d ? Math.round((n / d) * 1000) / 10 : 0; }
+
+function masterAiPythonStyle(nums) {
+    if (nums.length < 3) return { val: 'BIG', confidence: 55, number: 7, pat: 'PART1-FALLBACK' };
+    const recent = nums.slice(0, 12);
+    let bigScore = 0, smallScore = 0;
+    recent.forEach((n, i) => {
+        const weight = Math.pow(0.85, i);
+        if (isBig(n)) bigScore += weight; else smallScore += weight;
+    });
+    const last3 = nums.slice(0, 3);
+    const last5 = nums.slice(0, 5);
+    const big3 = last3.filter(isBig).length;
+    const big5 = last5.filter(isBig).length;
+    if (big3 >= 3) smallScore += 1.4;
+    if (big3 === 0) bigScore += 1.4;
+    if (big5 >= 4) smallScore += 0.9;
+    if (big5 <= 1) bigScore += 0.9;
+    const val = bigScore >= smallScore ? 'BIG' : 'SMALL';
+    const confidence = Math.max(55, Math.min(92, Math.round(58 + Math.abs(bigScore - smallScore) * 8)));
+    const pool = sideNumbers(val);
+    const counts = Object.fromEntries(pool.map(n => [n, 0]));
+    nums.slice(0, 30).forEach(n => { if (n in counts) counts[n]++; });
+    pool.sort((a, b) => counts[b] - counts[a]);
+    return { val, confidence, number: pool[0], numbers: pool.slice(0, 2), pat: 'PART1-MASTER' };
+}
+
+function part2PythonStyle(nums) {
+    if (nums.length < 20) return { ...masterAiPythonStyle(nums), confidence: 55, pat: 'PART2-FALLBACK' };
+    const current = nums[0];
+    let score = 0;
+    let hits = 0;
+    let p1Big = 0, p1Small = 0;
+    for (let i = 1; i < nums.length; i++) {
+        if (nums[i] === current) isBig(nums[i - 1]) ? p1Big++ : p1Small++;
     }
-
-    const key = `${first.color}-${first.size}|${second.color}-${second.size}`;
-    const mapping = {
-        'RED-BIG|RED-BIG': 'SMALL',
-        'RED-BIG|RED-SMALL': 'SMALL',
-        'RED-SMALL|RED-BIG': 'BIG',
-        'RED-SMALL|RED-SMALL': 'BIG',
-        'RED-BIG|GREEN-BIG': 'SMALL',
-        'RED-BIG|GREEN-SMALL': 'SMALL',
-        'RED-SMALL|GREEN-BIG': 'BIG',
-        'RED-SMALL|GREEN-SMALL': 'SMALL',
-        'GREEN-BIG|GREEN-BIG': 'SMALL',
-        'GREEN-BIG|GREEN-SMALL': 'BIG',
-        'GREEN-SMALL|GREEN-BIG': 'SMALL',
-        'GREEN-SMALL|GREEN-SMALL': 'BIG',
-        'GREEN-BIG|RED-BIG': 'BIG',
-        'GREEN-BIG|RED-SMALL': 'BIG',
-        'GREEN-SMALL|RED-BIG': 'SMALL',
-        'GREEN-SMALL|RED-SMALL': 'BIG'
+    const p1Total = p1Big + p1Small;
+    if (p1Total >= 5) { score += ((p1Big - p1Small) / p1Total) * 3.5; hits++; }
+    const l3 = nums.slice(0, 3).filter(isBig).length;
+    if (l3 === 3) { score -= 2.2; hits++; } else if (l3 === 0) { score += 2.2; hits++; }
+    const l5 = nums.slice(0, 5).filter(isBig).length;
+    if (l5 >= 4) { score -= 1.8; hits++; } else if (l5 === 0) { score += 1.8; hits++; }
+    const l10 = nums.slice(0, 10);
+    const zigzag = l10.slice(1).filter((n, i) => isBig(n) !== isBig(l10[i])).length;
+    if (zigzag >= 7) { score += isBig(current) ? -2 : 2; hits++; }
+    const l500 = nums.slice(0, 500).filter(isBig).length;
+    const total500 = Math.min(500, nums.length);
+    if (l500 > (total500 - l500) * 1.08) { score -= 0.6; hits++; }
+    if ((total500 - l500) > l500 * 1.08) { score += 0.6; hits++; }
+    const l20 = nums.slice(0, 20).filter(isBig).length;
+    if (l20 >= 13) { score -= 1; hits++; } else if (l20 <= 7) { score += 1; hits++; }
+    const l100 = nums.slice(0, 100);
+    const reversals = l100.slice(1).filter((n, i) => isBig(n) !== isBig(l100[i])).length;
+    const revRate = reversals / Math.max(l100.length - 1, 1);
+    const previous = nums[1];
+    if (revRate > 0.58) { score += isBig(previous) ? 1.2 : -1.2; hits++; }
+    else if (revRate < 0.42) { score += isBig(previous) ? -0.8 : 0.8; hits++; }
+    if ([8, 9].includes(current)) score += 0.5;
+    else if ([6, 7].includes(current)) score += 0.3;
+    else if ([0, 1].includes(current)) score -= 0.5;
+    else if ([2, 3].includes(current)) score -= 0.3;
+    const val = score >= 0 ? 'BIG' : 'SMALL';
+    const confidence = Math.max(60, Math.min(95, Math.round(68 + Math.abs(score) * 5 + hits)));
+    const pool = sideNumbers(val);
+    const counts = Object.fromEntries(pool.map(n => [n, 0]));
+    nums.slice(0, 30).forEach(n => { if (n in counts) counts[n]++; });
+    pool.sort((a, b) => counts[b] - counts[a]);
+    return {
+        val, confidence, number: pool[0], numbers: pool.slice(0, 2),
+        pat: 'PART2-DEEP', currentNum: current, patterns: hits,
+        bigCount: nums.slice(0, 20).filter(isBig).length,
+        smallCount: nums.slice(0, 20).filter(n => !isBig(n)).length
     };
+}
 
-    return mapping[key] || null;
+function part4PythonStyle(nums) {
+    if (nums.length < 10) return { ...masterAiPythonStyle(nums), confidence: 55, pat: 'PART4-FALLBACK' };
+    const recent = nums.slice(0, 20);
+    const big = recent.filter(isBig).length;
+    const small = recent.length - big;
+    const last3 = nums.slice(0, 3).map(sideOf);
+    const streak = last3.every(x => x === last3[0]);
+    let val = big > small ? 'SMALL' : 'BIG';
+    if (streak) val = last3[0] === 'BIG' ? 'SMALL' : 'BIG';
+    const confidence = Math.max(65, Math.min(90, 60 + Math.abs(big - small) * 3 + (streak ? 6 : 0)));
+    const pool = sideNumbers(val);
+    const counts = Object.fromEntries(pool.map(n => [n, 0]));
+    nums.slice(0, 30).forEach(n => { if (n in counts) counts[n]++; });
+    pool.sort((a, b) => counts[b] - counts[a]);
+    return { val, confidence, number: pool[0], numbers: pool.slice(0, 2), pat: 'PART4-ENSEMBLE', bigPct: pct(big, recent.length), smallPct: pct(small, recent.length) };
+}
+
+function strongestPythonPrediction(list) {
+    const nums = historyNumbers(list, 1000);
+    if (nums.length < 3) return null;
+    const candidates = [
+        masterAiPythonStyle(nums.slice(0, 30)),
+        part2PythonStyle(nums),
+        part4PythonStyle(nums.slice(0, 100))
+    ];
+    const selected = candidates.reduce((best, item) => item.confidence > best.confidence ? item : best);
+    return { ...selected, source: 'PYTHON-STRONGEST', confidence: Number(selected.confidence) || 0 };
 }
 
 async function decidePrediction(_list, currentPeriod, userId) {
     initUser(userId);
 
-    // Change applies only to Big/Small (SIZE) mode.
-    // NUMBER and COMBINED modes continue through the existing site path.
+    // SIZE mode now uses the Python-style strongest local engine.
+    // The old two-draw 16-combination mapping and PATTERN/OPPOSITE switching are removed.
     if (autobetCfg[userId]?.mode === 'SIZE') {
-        const predictedSize = predictSizeFromTwoDraws(_list);
-        if (!predictedSize) {
+        const strongest = strongestPythonPrediction(_list);
+        if (!strongest) {
             userStates[userId].lastPrediction = 'SKIP';
             userStates[userId].lastNumber = null;
-            userStates[userId].lastReason = 'Two-draw 16-combination rule could not be evaluated';
-            return { skip: true, reason: 'Need two valid previous draws' };
+            userStates[userId].lastReason = 'Not enough valid history';
+            return { skip: true, reason: 'Need at least 3 valid historical results' };
         }
 
-        const st = autobetState[userId];
-        // SIZE mode has two strategy states. Start with PATTERN; after a loss,
-        // switch to OPPOSITE. Stay in the winning state until the next loss.
-        st.sizePatternPrediction = predictedSize;
-        const strategyMode = st.sizeStrategyMode === "OPPOSITE" ? "OPPOSITE" : "PATTERN";
-        const selectedSize = strategyMode === "OPPOSITE"
-            ? (predictedSize === "BIG" ? "SMALL" : "BIG")
-            : predictedSize;
-
-        userStates[userId].lastPrediction = selectedSize;
-        userStates[userId].lastNumber = null;
-        userStates[userId].lastReason = `16-combination ${strategyMode}; pattern=${predictedSize}`;
+        const selectedNumber = Number(strongest.number);
+        userStates[userId].lastPrediction = strongest.val;
+        userStates[userId].lastNumber = selectedNumber;
+        userStates[userId].lastReason = `${strongest.pat}; confidence=${strongest.confidence}%`;
 
         return {
-            type: 'SIZE',
-            val: selectedSize,
-            pat: '16-COMBINATION',
-            patternVal: predictedSize,
-            strategyMode
+            type: 'COMBINED',
+            val: strongest.val,
+            number: selectedNumber,
+            confidence: strongest.confidence,
+            pat: strongest.pat,
+            source: strongest.source,
+            bets: [
+                { type: 'SIZE', val: strongest.val, kind: 'size' },
+                { type: 'NUMBER', val: selectedNumber, kind: 'number' }
+            ]
         };
     }
 
