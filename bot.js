@@ -815,7 +815,7 @@ function scheduleRun(userId, chatId, delayMs) {
     nextRunTimers.set(key, timer);
 }
 const MAX_LEVEL_HISTORY = 10;
-const PATTERN_LOSSES_REQUIRED = 4;
+const PATTERN_LOSSES_REQUIRED = 2;
 const MAX_PATTERN_HISTORY = 50;
 
 function sleep(ms) {
@@ -1451,7 +1451,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
 // COMPLETE BOT LOGIC WITH 4-PREDICTION PATTERN MODE EXTENSION & FIXES
 // ============================================================
 // ============================================================
-// COMPLETE BOT LOGIC WITH STRICT 4-CONSECUTIVE LOSS REQUIREMENT (NO WINS ALLOWED)
+// COMPLETE BOT LOGIC WITH STRICT 2-CONSECUTIVE LOSS REQUIREMENT (NO WINS ALLOWED)
 // ============================================================
 let userStates = {};
 
