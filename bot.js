@@ -815,6 +815,8 @@ function scheduleRun(userId, chatId, delayMs) {
     nextRunTimers.set(key, timer);
 }
 const MAX_LEVEL_HISTORY = 10;
+const PATTERN_LOSSES_REQUIRED = 4;
+const MAX_PATTERN_HISTORY = 50;
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
