@@ -1636,7 +1636,9 @@ async function dispatchNormalPredictionAndPatternBet(userId, chatId, next, signa
         if (result && result.ok) {
             placedBets.push({ type: "SIZE", val: betSignal.val, kind: "size", amt: result.amt });
             await send(chatId,
-                `BET PLACED\nSide: ${betSignal.val}\nLevel: L${st.level}\nAmount: ₹${result.amt}\nPattern: ${pattern.reason}`
+                "✅ Bets Success: " + placedBets.length + " | L" + st.level + "\n" +
+                placedBets.map(b => b.type + "=" + b.val + " ₹" + Number(b.amt || 0).toFixed(2)).join("\n") +
+                "\nPattern: " + pattern.reason + "\n⏳ Checking result..."
             );
         } else {
             await send(chatId, "BET FAILED: " + (result?.msg || "Unknown error"));
@@ -1988,9 +1990,11 @@ async function handleWin(userId, chatId, actual, num, betLevel, bets = [], settl
     } else {
         const numberAmount = bets.filter(b => b.type === "NUMBER").reduce((sum, b) => sum + Number(b.amt || 0), 0);
         const sizeAmount = bets.filter(b => b.type === "SIZE").reduce((sum, b) => sum + Number(b.amt || 0), 0);
-        profit = numberAmount > 0
-            ? numberAmount * NUMBER_WIN_MULTIPLIER - (amt - numberAmount)
-            : sizeAmount * SIZE_WIN_MULTIPLIER - (amt - sizeAmount);
+        const grossPayout = numberAmount > 0
+            ? numberAmount * NUMBER_WIN_MULTIPLIER
+            : sizeAmount * SIZE_WIN_MULTIPLIER;
+        // Net profit = gross payout minus the total stake placed.
+        profit = grossPayout - amt;
     }
     
     pt.totalBets++; pt.wins++; pt.pnl += profit; 
