@@ -1986,7 +1986,7 @@ async function decidePrediction(list, currentPeriod, userId) {
 
     // The supplied CYBER DEEP LOGIC is adapted for Node.js. It uses the
     // historical draw list only and never relies on browser globals.
-    const deep = cyberDeepPredict(list, userId);
+    const deep = predict(list, userId);
     if (!deep || !deep.pred) {
         state.lastPrediction = "SKIP";
         state.lastReason = deep?.reason || "Ensemble could not produce a signal";
