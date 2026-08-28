@@ -6,6 +6,96 @@ const puppeteer   = require('puppeteer');
 const fs          = require('fs');
 const path        = require('path');
 const { PNG }      = require('pngjs');
+// Adapted from the supplied CYBER DEEP LOGIC. This is a heuristic signal,
+// not a guarantee of future game results.
+const numberHistoryByUser = new Map();
+
+function numberOf(item) {
+  const n = Number.parseInt(item?.number ?? item?.winNumber, 10);
+  return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null;
+}
+function sideOf(n) { return n >= 5 ? 'BIG' : 'SMALL'; }
+function safeHistory(history) {
+  return (Array.isArray(history) ? history : [])
+    .map(x => ({ ...x, number: numberOf(x) }))
+    .filter(x => x.number !== null);
+}
+function add(votes, side, score) {
+  if ((side === 'BIG' || side === 'SMALL') && Number.isFinite(score)) votes[side] += score;
+}
+
+function patternVote(h) {
+  const nums = h.slice(0, 12).map(x => x.number);
+  const seq = nums.map(sideOf);
+  const votes = { BIG: 0, SMALL: 0 };
+  if (seq.length < 4) return votes;
+
+  let streak = 1;
+  for (let i = 1; i < seq.length && seq[i] === seq[0]; i++) streak++;
+  if (streak >= 4) add(votes, seq[0] === 'BIG' ? 'SMALL' : 'BIG', 4);
+  else if (streak >= 3) add(votes, seq[0] === 'BIG' ? 'SMALL' : 'BIG', 2.5);
+
+  const bigCount = h.slice(0, 15).filter(x => x.number >= 5).length;
+  if (bigCount >= 10) votes.SMALL += 2.2;
+  else if (bigCount <= 5) votes.BIG += 2.2;
+
+  let alternating = true;
+  for (let i = 1; i < Math.min(6, seq.length); i++) {
+    if (seq[i] === seq[i - 1]) { alternating = false; break; }
+  }
+  if (alternating && seq.length >= 6) add(votes, seq[5] === 'BIG' ? 'SMALL' : 'BIG', 3);
+
+  let ema = nums[0];
+  for (let i = 1; i < nums.length; i++) ema = ema * 0.7 + nums[i] * 0.3;
+  add(votes, ema >= 5 ? 'BIG' : 'SMALL', 1.2);
+
+  let changes = 0;
+  for (let i = 1; i < seq.length; i++) if (seq[i] !== seq[i - 1]) changes++;
+  if (changes >= 5) add(votes, seq[0] === 'BIG' ? 'SMALL' : 'BIG', 1.5);
+
+  let up = 0, down = 0;
+  for (let i = 0; i < Math.min(6, nums.length - 1); i++) {
+    if (nums[i] > nums[i + 1]) up++;
+    else if (nums[i] < nums[i + 1]) down++;
+  }
+  if (up > down) add(votes, 'SMALL', 0.8);
+  else if (down > up) add(votes, 'BIG', 0.8);
+
+  // Repeat-distance alignment: if positions 0 and 2 match, favour the next break.
+  if (seq.length >= 5 && seq[0] === seq[2] && seq[1] === seq[3]) {
+    add(votes, seq[4] === 'BIG' ? 'SMALL' : 'BIG', 1.6);
+  }
+  return votes;
+}
+
+function chooseNumber(side, h, userId) {
+  const pool = side === 'BIG' ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
+  const key = String(userId ?? 'global');
+  const hist = numberHistoryByUser.get(key) || [];
+  const recent = hist.slice(-2);
+  const freq = Object.fromEntries(pool.map(n => [n, 0]));
+  h.slice(0, 18).forEach(x => { if (freq[x.number] !== undefined) freq[x.number]++; });
+  const candidates = pool.filter(n => !recent.includes(n));
+  const scored = (candidates.length ? candidates : pool)
+    .map(n => ({ n, score: (5 - freq[n]) * 1.2 + (hist.includes(n) ? -0.8 : 0.5) }))
+    .sort((a, b) => b.score - a.score);
+  const selected = scored[0]?.n ?? pool[0];
+  hist.push(selected);
+  while (hist.length > 12) hist.shift();
+  numberHistoryByUser.set(key, hist);
+  return selected;
+}
+
+function predict(history, userId) {
+  const h = safeHistory(history);
+  if (h.length < 4) return { pred: null, conf: 0, votes: { BIG: 0, SMALL: 0 }, reason: 'Not enough history' };
+  const votes = patternVote(h);
+  const pred = votes.BIG >= votes.SMALL ? 'BIG' : 'SMALL';
+  const conf = Math.min(96, Math.max(50, Math.round(58 + Math.abs(votes.BIG - votes.SMALL) * 4)));
+  const num = chooseNumber(pred, h, userId);
+  return { pred, conf, num, bigSmall: pred === 'BIG' ? 'Big' : 'Small', votes, sampleSize: h.length };
+}
+
 // ============================================================
 //  HELPER FUNCTIONS
 // ============================================================
@@ -1881,64 +1971,47 @@ function oppositeNumberForSize(size, displayedNumbers) {
 async function decidePrediction(list, currentPeriod, userId) {
     const state = initState(userId);
 
-    if (!Array.isArray(list) || list.length < 1) {
+    if (!Array.isArray(list) || list.length < 4) {
         state.lastPrediction = "SKIP";
-        state.lastReason = "History unavailable";
+        state.lastReason = "Not enough draw history for ensemble logic";
         return { skip: true, reason: state.lastReason };
     }
 
-    const currentIssue = String(list[0]?.issueNumber ?? "");
-    const currentResult = Number.parseInt(list[0]?.number ?? list[0]?.winNumber ?? "", 10);
-
-    // Previous result 0 is excluded exactly as requested.
-    if (!currentIssue || !Number.isInteger(currentResult) || currentResult === 0) {
+    const currentResult = parseDrawNumber(list[0]);
+    if (currentResult === null) {
         state.lastPrediction = "SKIP";
-        state.lastReason = "Previous result is zero or invalid";
+        state.lastReason = "Latest draw number is invalid";
         return { skip: true, reason: state.lastReason };
     }
 
-    let nextLast3;
-    try {
-        const nextPeriod = BigInt(String(currentPeriod || (BigInt(currentIssue) + 1n)));
-        nextLast3 = Number.parseInt(nextPeriod.toString().slice(-3), 10);
-    } catch {
+    // The supplied CYBER DEEP LOGIC is adapted for Node.js. It uses the
+    // historical draw list only and never relies on browser globals.
+    const deep = cyberDeepPredict(list, userId);
+    if (!deep || !deep.pred) {
         state.lastPrediction = "SKIP";
-        state.lastReason = "Invalid period number";
+        state.lastReason = deep?.reason || "Ensemble could not produce a signal";
         return { skip: true, reason: state.lastReason };
     }
 
-    // User-requested calculation:
-    // NEXT_LAST_3 × exp(CURRENT_RESULT), remove decimal, take first 14 chars,
-    // then use the final digit for BIG/SMALL.
-    const answer = nextLast3 * Math.exp(currentResult);
-    const answerStr = Number.isFinite(answer) ? answer.toString() : "";
-    const noDecimal = answerStr.replace(".", "");
-    const first14 = noDecimal.substring(0, 14);
-    if (!first14) {
-        state.lastPrediction = "SKIP";
-        state.lastReason = "Calculation produced no usable digits";
-        return { skip: true, reason: state.lastReason };
-    }
-
-    const lastDigit = Number.parseInt(first14.charAt(first14.length - 1), 10);
-    if (!Number.isInteger(lastDigit)) {
-        state.lastPrediction = "SKIP";
-        state.lastReason = "Calculation produced an invalid final digit";
-        return { skip: true, reason: state.lastReason };
-    }
-
-    const side = lastDigit <= 4 ? "SMALL" : "BIG";
+    const side = normalizeSize(deep.pred);
     state.mode = "NORMAL";
     state.lastPrediction = side;
-    state.lastNumber = null;
-    state.lastReason = `NORMAL calculation: ${nextLast3} × exp(${currentResult}) => ${first14}`;
+    state.lastNumber = deep.num ?? null;
+    state.lastReason = `CYBER DEEP ensemble: ${deep.conf}% confidence from ${deep.sampleSize} draws`;
 
     return {
         type: "SIZE",
         val: side,
-        pat: "NORMAL",
+        pat: "CYBER_DEEP_ENSEMBLE",
         normal: true,
-        calculation: { nextLast3, currentResult, answer, first14, lastDigit },
+        confidence: deep.conf,
+        selectedNumber: deep.num ?? null,
+        votes: deep.votes,
+        calculation: {
+            currentResult,
+            sampleSize: deep.sampleSize,
+            votes: deep.votes
+        },
         bets: [{ type: "SIZE", val: side, kind: "size" }]
     };
 }
