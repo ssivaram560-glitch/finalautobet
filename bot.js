@@ -909,12 +909,9 @@ function formulaMLPredict(list) {
     }
 
     const accuracy = total ? correct / total : 0.5;
-    // Return the opposite of the calculated analysis result:
-    // SMALL analysis => BIG prediction, BIG analysis => SMALL prediction.
-    const analyzedPrediction = nextMode === "RECOVERY"
+    const prediction = nextMode === "RECOVERY"
         ? (current.basePrediction === "BIG" ? "SMALL" : "BIG")
         : current.basePrediction;
-    const prediction = analyzedPrediction === "BIG" ? "SMALL" : "BIG";
     return {
         type: "SIZE",
         val: prediction,
