@@ -1,6 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios       = require('axios');
 const crypto      = require('crypto');
+const zlib        = require('zlib');
+const puppeteer   = require('puppeteer');
 
 // ============================================================
 //  CONFIG
@@ -31,6 +33,13 @@ http.createServer((req, res) => {
     res.end('SIVA BOT OK');
 }).listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
 
+const RENDER_URL = process.env.RENDER_URL || "";
+if (RENDER_URL) {
+    setInterval(() => {
+        axios.get(RENDER_URL).catch(() => {});
+        console.log("[PING] Keep-alive ping sent");
+    }, 14 * 60 * 1000);
+}
 
 // ============================================================
 //  STORAGE
@@ -55,6 +64,73 @@ let userTokens = {};
 let userStates = {};
 const predictionTimers = new Map();
 const resultIntervals = new Map();
+
+// The Netlify app computes the prediction in the browser. Keep one browser/page
+// for the whole process and serialize reads so Render free-plan memory stays bounded.
+const REMOTE_PREDICTOR_URL = process.env.REMOTE_PREDICTOR_URL ||
+    "https://tranquil-gingersnap-48aa12.netlify.app/";
+let predictorBrowser = null;
+let predictorPage = null;
+let predictorReadLock = Promise.resolve();
+
+function withPredictorLock(task) {
+    const next = predictorReadLock.then(task, task);
+    predictorReadLock = next.catch(() => {});
+    return next;
+}
+
+async function closePredictorBrowser() {
+    const browser = predictorBrowser;
+    predictorBrowser = null;
+    predictorPage = null;
+    if (browser) {
+        try { await browser.close(); } catch (_) {}
+    }
+}
+
+async function getRemoteSizePrediction() {
+    return withPredictorLock(async () => {
+        if (!predictorBrowser || !predictorBrowser.isConnected()) {
+            predictorBrowser = await puppeteer.launch({
+                headless: true,
+                args: [
+                    '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu',
+                    '--disable-dev-shm-usage', '--single-process'
+                ]
+            });
+            predictorPage = await predictorBrowser.newPage();
+            await predictorPage.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
+            await predictorPage.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36');
+            await predictorPage.setRequestInterception(true);
+            predictorPage.on('request', request => {
+                const type = request.resourceType();
+                if (type === 'image' || type === 'font' || type === 'media') request.abort().catch(() => {});
+                else request.continue().catch(() => {});
+            });
+        }
+
+        await predictorPage.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}`, {
+            waitUntil: 'domcontentloaded', timeout: 20000
+        });
+        await predictorPage.waitForFunction(() => {
+            const el = document.getElementById('predictedSize');
+            return el && /^(BIG|SMALL)$/i.test((el.textContent || '').trim());
+        }, { timeout: 20000 });
+
+        const prediction = await predictorPage.evaluate(() => ({
+            period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
+            size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
+            status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
+        }));
+        if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
+            throw new Error('Live Netlify page returned an invalid size prediction');
+        }
+        return prediction;
+    });
+}
+
+process.once('SIGTERM', () => { closePredictorBrowser().finally(() => process.exit(0)); });
+process.once('SIGINT', () => { closePredictorBrowser().finally(() => process.exit(0)); });
 
 function schedulePrediction(userId, chatId, delayMs) {
     const key = String(userId);
@@ -419,12 +495,98 @@ async function fetchCaptcha() {
 
 
 async function autoLogin(userId, chatId, silent = false) {
-    // Intentionally token-only: Puppeteer/browser automation was removed to keep
-    // Render Free memory usage bounded. Supply a token with /setmytoken.
-    const token = getToken(userId);
-    if (token && token.length >= 20) return true;
-    if (!silent && chatId) await send(chatId, "❌ Token missing. Use /setmytoken TOKEN.");
-    return false;
+
+
+    const creds = userCreds[userId] || {};
+    const { phone, pass } = creds;
+
+    if (!phone || !pass) {
+        await logBoth(chatId, `[AUTO LOGIN] User ${userId} has no phone or password set.`);
+
+        return false;
+    }
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            headless: true, 
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
+        });
+        const page = await browser.newPage();
+        await page.setDefaultNavigationTimeout(90000); 
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+        let capturedToken = null;
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            if (req.url().includes('GetBalance') && req.headers()['authorization']) {
+                capturedToken = req.headers()['authorization'].replace(/^Bearer\s+/i, "");
+            }
+            req.continue();
+        });
+
+        await page.goto('https://13llottery.com/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
+        await page.waitForSelector('input', { timeout: 30000 });
+        const inputs = await page.$$('input');
+        if (inputs.length < 2) throw new Error("Login inputs not found");
+
+        await inputs[0].type(phone, { delay: 50 });
+        await inputs[1].type(pass, { delay: 50 });
+        
+        await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const loginBtn = btns.find(b => b.innerText.includes('Log in') || b.innerText.includes('Login'));
+            if (loginBtn) loginBtn.click();
+            else document.querySelector('form')?.submit();
+        });
+
+        try {
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
+        } catch (e) {
+            // Ignore timeout, we'll check token anyway
+        }
+        await new Promise(r => setTimeout(r, 5000));
+
+        await page.evaluate(() => {
+            const closeBtn = document.querySelector('.van-icon-cross') || document.querySelector('.close-icon');
+            if (closeBtn) closeBtn.click();
+        });
+        await new Promise(r => setTimeout(r, 1000));
+
+        await page.evaluate(() => {
+            const navItems = Array.from(document.querySelectorAll('div, span'));
+            const lotteryBtn = navItems.find(el => el.innerText.trim() === 'Lottery');
+            if (lotteryBtn) lotteryBtn.click();
+        });
+        await new Promise(r => setTimeout(r, 2000));
+
+        await page.evaluate(() => {
+            const navItems = Array.from(document.querySelectorAll('div, span'));
+            const winGoBtn = navItems.find(el => el.innerText.trim() === 'Win Go');
+            if (winGoBtn) winGoBtn.click();
+        });
+
+        for (let i = 0; i < 50; i++) {
+            if (capturedToken) break;
+            await new Promise(r => setTimeout(r, 1000));
+        }
+
+        if (capturedToken) {
+            // Success: Update token only when captured
+            userTokens[userId] = capturedToken;
+            await logBoth(chatId, `✅ [SUCCESS] Token captured successfully for user ${userId}!`);
+            return true;
+        } else {
+            throw new Error("Token not found in requests after login sequence.");
+        }
+
+    } catch (err) {
+        await logBoth(chatId, `❌ Login Error for user ${userId}: ${err.message}`, true);
+        return false;
+    } finally {
+        if (browser) await browser.close();
+
+    }
 }
 
 // ============================================================
@@ -722,193 +884,70 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     await sendSticker(chatId, LOSS_STICKER);
 }
 
-//  LIVE SITE SIZE-ONLY PREDICTOR
+//  REMOTE SIZE-ONLY PREDICTION
 // ============================================================
-// The live Netlify app reads the public history endpoint below and applies this
-// same deterministic size-only rule set. No color/number betting prediction is
-// exposed by this bot.
-const LIVE_HISTORY_URL = process.env.LIVE_HISTORY_URL || "https://luciferapi.com/?t=";
-const LIVE_FETCH_TIMEOUT_MS = 8000;
-const MAX_HISTORY_ROWS = 120;
-
-const LIVE_COLOR_MAP = {
-    0: { baseColor: "red", size: "small", violet: true },
-    1: { baseColor: "green", size: "small", violet: false },
-    2: { baseColor: "red", size: "small", violet: false },
-    3: { baseColor: "green", size: "small", violet: false },
-    4: { baseColor: "red", size: "small", violet: false },
-    5: { baseColor: "green", size: "big", violet: true },
-    6: { baseColor: "red", size: "big", violet: false },
-    7: { baseColor: "green", size: "big", violet: false },
-    8: { baseColor: "red", size: "big", violet: false },
-    9: { baseColor: "green", size: "big", violet: false }
-};
-function liveNum(row) { const n = Number(row?.number ?? row?.winNumber ?? row?.result ?? row?.num); return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null; }
-function liveSize(n) { return LIVE_COLOR_MAP[n]?.size || null; }
-function liveColor(n) { return LIVE_COLOR_MAP[n]?.baseColor || null; }
-function liveViolet(n) { return !!LIVE_COLOR_MAP[n]?.violet; }
-function oppositeSize(size) { return size === "big" ? "small" : "big"; }
-function analyzeFirstFourTrend(rows) {
-    if (rows.length < 4) return null;
-    const sizes = rows.slice(0, 4).map(r => liveSize(liveNum(r)));
-    if (sizes.every(s => s === "big")) return "big";
-    if (sizes.every(s => s === "small")) return "small";
-    if (sizes[0] !== sizes[1] && sizes[1] !== sizes[2] && sizes[2] !== sizes[3]) return sizes[0];
-    return sizes[3];
-}
-function applyLiveSizeLogic(pair, third, fourth, rows) {
-    const above = pair.pairAbove;
-    const below1 = pair.pairBelow1;
-    const below2 = pair.pairBelow2;
-    const n3 = liveNum(third), n4 = liveNum(fourth), na = liveNum(above), nb1 = liveNum(below1), nb2 = liveNum(below2);
-    if ([n3, n4, na, nb1, nb2].some(n => n === null)) return null;
-    if (liveViolet(n3) && liveViolet(n4)) return { result: "skip", rule: "skip_both_violet_in_3rd_4th" };
-    const colorMatch = liveColor(n3) === liveColor(nb1) && liveColor(n4) === liveColor(nb2);
-    const sizeMatch = liveSize(n3) === liveSize(nb1) && liveSize(n4) === liveSize(nb2);
-    const oppositeColorMatch = liveColor(n3) !== liveColor(nb1) && liveColor(n4) !== liveColor(nb2);
-    const oppositeSizeMatch = liveSize(n3) !== liveSize(nb1) && liveSize(n4) !== liveSize(nb2);
-    const violetCount = [nb1, nb2].filter(liveViolet).length;
-    let result, rule;
-    if (colorMatch && !sizeMatch) { result = analyzeFirstFourTrend(rows); rule = "color_match_follow_trend"; }
-    else if (!colorMatch && sizeMatch) { result = oppositeSize(liveSize(na)); rule = "size_match_break_trend"; }
-    else if (colorMatch && sizeMatch) { result = oppositeSize(liveSize(na)); rule = "both_match_break_trend"; }
-    else if (oppositeColorMatch && oppositeSizeMatch) { result = oppositeSize(liveSize(na)); rule = "neither_match_opposite_above"; }
-    else if (oppositeSizeMatch) { result = oppositeSize(liveSize(na)); rule = "opposite_size_opposite_above"; }
-    else if (oppositeColorMatch) { result = oppositeSize(liveSize(na)); rule = "opposite_color_opposite_above"; }
-    else if (violetCount === 2) { result = liveSize(na); rule = "two_violets_same_predicted"; }
-    else { result = oppositeSize(liveSize(na)); rule = "fallback_opposite_above"; }
-    return result ? { result, rule } : null;
-}
-function liveSizePredict(list) {
-    const rows = (Array.isArray(list) ? list : []).map(x => ({...x, number: liveNum(x)})).filter(x => x.number !== null);
-    if (rows.length < 4) return null;
-    rows.sort((a, b) => Number(b.issueNumber ?? b.issue ?? b.period ?? 0) - Number(a.issueNumber ?? a.issue ?? a.period ?? 0));
-    const A = rows[0], B = rows[1], third = rows[2], fourth = rows[3];
-    let matchedPair = null, matchCount = 0;
-    for (let i = 2; i < rows.length - 3; i++) {
-        if (rows[i].number === A.number && rows[i + 1].number === B.number) {
-            matchCount++;
-            if (!matchedPair) matchedPair = { index: i, pairAbove: rows[i - 1], pairBelow1: rows[i + 2], pairBelow2: rows[i + 3] };
-        }
-    }
-    if (!matchedPair) return null;
-    const pred = applyLiveSizeLogic(matchedPair, third, fourth, rows);
-    if (!pred || pred.result === "skip") return pred ? { type: "SIZE", val: null, mode: pred.rule, calculation: "live-site size-only rule: skip" } : null;
-    return { type: "SIZE", val: pred.result.toUpperCase(), mode: pred.rule, calculation: "live Netlify predictor; size-only", pattern: `${A.number}${B.number}`, matches: matchCount };
-}
-async function fetchLivePrediction() {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), LIVE_FETCH_TIMEOUT_MS);
-    try {
-        const response = await axios.get(`${LIVE_HISTORY_URL}${Date.now()}`, { timeout: LIVE_FETCH_TIMEOUT_MS, signal: controller.signal, headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" } });
-        const payload = response.data;
-        const list = Array.isArray(payload?.data?.data) ? payload.data.data : Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.data?.list) ? payload.data.list : Array.isArray(payload?.list) ? payload.list : [];
-        const rows = list.slice(0, MAX_HISTORY_ROWS);
-        return { list: rows, prediction: liveSizePredict(rows) };
-    } finally { clearTimeout(timer); }
-}
-
-//  PREDICT LOOP
-// ============================================================
-function parseItem(item) {
-    const n = +(item.number || item.winNumber || 0);
-    return {
-        n,
-        size: n >= 5 ? "BIG" : "SMALL",
-        color:
-            n === 0 ? "RED" :
-            n === 5 ? "GREEN" :
-            n % 2 === 0 ? "RED" : "GREEN"
-    };
-}
-function stk(arr, key) {
-    let count = 1;
-    let val = arr[0]?.[key];
-    for (let i = 1; i < arr.length; i++) {
-        if (arr[i][key] === val) count++;
-        else break;
-    }
-    return { val, count };
-}
+// No local prediction algorithm is maintained here. The Netlify page is the
+// single source of truth; this bot reads only its next period and BIG/SMALL UI.
 async function runPredict(userId, chatId) {
-    if(!running[userId]) return;
+    if (!running[userId]) return;
     initUser(userId);
     const state = userStates[userId];
     const st = autobetState[userId];
     const cfg = autobetCfg[userId];
 
-    // Profit Target Check
-    if (st.isWaiting) {
-        if (Date.now() >= st.nextStartTime) {
-            st.isWaiting = false;
-            profitTrack[userId].pnl = 0; 
-            await send(chatId, "🔄 Timed Restart! Starting new section...");
-        } else {
-            return schedulePrediction(userId, chatId, 60000);
-        }
+    let remote;
+    try {
+        remote = await getRemoteSizePrediction();
+    } catch (error) {
+        console.error('[REMOTE PREDICTOR]', error?.message || error);
+        await send(chatId, '⏳ Live predictor unavailable. Retrying shortly...');
+        return schedulePrediction(userId, chatId, 15000);
     }
 
-    let live;
-    try { live = await fetchLivePrediction(); } catch (error) { console.error("[LIVE PREDICTOR]", error.message); return schedulePrediction(userId, chatId, 15000); }
-    const list = live.list;
-    if (!Array.isArray(list) || list.length < 4) return schedulePrediction(userId, chatId, 15000);
-
-    const next = nextIssueNumber(list);
-    if (!next || BigInt(next) <= BigInt(list[0].issueNumber)) return schedulePrediction(userId, chatId, 5000);
-    if(sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
+    const next = remote.period;
+    if (sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
     sentPeriods[userId].add(next);
-
-    // Live decision uses only the Netlify app's BIG/SMALL size-only logic.
-    const signal = live.prediction;
-    if (!signal) {
-        await send(chatId, "⏭️ SKIP — Live site has no size prediction yet.");
-        return schedulePrediction(userId, chatId, 5000);
+    if (sentPeriods[userId].size > 100) {
+        const oldest = sentPeriods[userId].values().next().value;
+        if (oldest) sentPeriods[userId].delete(oldest);
     }
-    if (!signal.val) return schedulePrediction(userId, chatId, 5000);
-    signal.predictionDetails = { liveDecision: "live-netlify-size-only", calculation: signal.calculation };
-    console.log(`[LIVE SIZE] ${signal.mode} ${signal.val} matches=${signal.matches || 0}`);
+
     state.currentMode = null;
-    state.lastPrediction = signal.val;
-    // Snapshot the level used for this prediction before any result update.
-    // The martingale state is the single source of truth for the level.
-    // Never reset the displayed/bet level based on NORMAL or RECOVERY mode.
+    state.lastPrediction = remote.size;
     const maxLevel = Math.max(1, Math.min(10, Number(cfg.maxLvl) || 1));
     const predictionLevel = Math.max(1, Math.min(maxLevel, Number(st.level) || 1));
-
-    // Only the explicit AutoBet toggle controls whether a bet is sent.
-    // `running[userId]` remains the master emergency stop.
     const canBet = cfg.enabled === true;
-    const effectiveLevel = predictionLevel;
-    const curBet = Number(cfg.customBets[effectiveLevel - 1] || (cfg.baseBet * MULT[effectiveLevel - 1]) || 0);
-    const abLine = (canBet ? "💰 BET " : "👀 WATCH ") + "L" + effectiveLevel + ": ₹" + curBet;
+    const curBet = Number(cfg.customBets[predictionLevel - 1] ||
+        (cfg.baseBet * MULT[predictionLevel - 1]) || 0);
+    const abLine = (canBet ? '💰 BET ' : '👀 WATCH ') +
+        'L' + predictionLevel + ': ₹' + curBet;
 
-    // User-facing prediction box: expose only the period, signal and active level.
-    // All calculation/model details remain server-side in logs and internal state.
+    // User-facing output intentionally contains size only; remote status is not exposed.
     await send(chatId,
-"╔══════════════════════════╗\n"+
-"║   👑 EARN WITH ME AI    ║\n"+
-"╠══════════════════════════╣\n"+
-"║ Period  : "+next.slice(-6)+"\n"+
-"║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
-"║ Level   : L"+effectiveLevel+"\n"+
-"╠══════════════════════════╣\n"+
-"║ "+abLine+"\n"+
-"╚══════════════════════════╝",
-        {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
+        '╔══════════════════════════╗\n' +
+        '║   👑 EARN WITH ME AI    ║\n' +
+        '╠══════════════════════════╣\n' +
+        '║ Period  : ' + next.slice(-6) + '\n' +
+        '║ Size    : ' + (remote.size === 'BIG' ? '🔵 BIG' : '🟠 SMALL') + '\n' +
+        '║ Level   : L' + predictionLevel + '\n' +
+        '╠══════════════════════════╣\n' +
+        '║ ' + abLine + '\n' +
+        '╚══════════════════════════╝',
+        { reply_markup: { inline_keyboard: [[{ text: '💰 CHECK NOW', url: REG_LINK }]] } }
     );
 
     let betPlaced = false;
-    if (canBet) { 
-        const result = await placeBet(userId, chatId, next, signal.val, signal.type, effectiveLevel);
-        if (result && result.ok) {
+    if (canBet) {
+        const result = await placeBet(userId, chatId, next, remote.size, 'SIZE', predictionLevel);
+        if (result?.ok) {
             betPlaced = true;
-            await send(chatId, "✅ Bet placed successfully | L" + effectiveLevel + "\n⏳ Checking result...");
-        } else if (result && !result.ok) {
-            await send(chatId, "❌ Bet Failed: " + (result.msg || "Unknown error"));
+            await send(chatId, '✅ Bet placed successfully | L' + predictionLevel + '\n⏳ Checking result...');
+        } else if (result) {
+            await send(chatId, '❌ Bet Failed: ' + (result.msg || 'Unknown error'));
         }
     }
 
-    checkResult(userId, chatId, next, signal.val, signal.type, betPlaced, signal.mode, effectiveLevel);
+    checkResult(userId, chatId, next, remote.size, 'SIZE', betPlaced, null, predictionLevel);
 }
 // ============================================================
 //  RESULT CHECKER
@@ -1146,7 +1185,6 @@ function recoverPolling(err) {
     }, 5000);
 }
 function startBot(){
-    if (!BOT_TOKEN || !OWNER_ID || !OWNER_PASS) throw new Error("BOT_TOKEN, OWNER_ID and OWNER_PASS environment variables are required");
     if(bot){try{bot.stopPolling();}catch(e){}}
     bot=new TelegramBot(BOT_TOKEN,{polling:{interval:1000,autoStart:true,params:{timeout:30}}});
     bot.on("polling_error",err=>{
@@ -1454,7 +1492,7 @@ if(text==="🔢 Set Watch Losses"){
             userStates[id].lastPrediction=null;
 
             // Load previous B/S history from API
-            const prevList = (await fetchLivePrediction().catch(() => ({list: []}))).list;
+            const prevList = await fetchList();
             initState(id);
 
             if (prevList && prevList.length >= 4) {
