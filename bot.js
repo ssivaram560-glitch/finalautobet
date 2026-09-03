@@ -143,7 +143,9 @@ async function readRemotePredictionOnce() {
         await page.waitForFunction(() => {
             const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
             const size = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
-            return /^\d+$/.test(period) && /^(BIG|SMALL)$/.test(size);
+            const status = document.getElementById('predictionStatus')?.textContent?.trim() || '';
+            const isSkip = /SKIP|NO MATCHING PATTERN/i.test(status) || size === 'SKIP';
+            return /^\d+$/.test(period) && (/^(BIG|SMALL)$/.test(size) || isSkip);
         }, { timeout: 60000, polling: 1000 });
     } catch (waitError) {
         const debug = await page.evaluate(() => ({
@@ -158,11 +160,13 @@ async function readRemotePredictionOnce() {
         );
     }
 
-    return page.evaluate(() => ({
-        period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
-        size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
-        status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
-    }));
+    return page.evaluate(() => {
+        const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
+        const rawSize = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
+        const status = document.getElementById('predictionStatus')?.textContent?.trim() || '';
+        const isSkip = /SKIP|NO MATCHING PATTERN/i.test(status) || rawSize === 'SKIP';
+        return { period, size: isSkip ? 'SKIP' : rawSize, status };
+    });
 }
 
 async function getRemoteSizePrediction() {
@@ -965,6 +969,16 @@ async function runPredict(userId, chatId) {
     const next = remote.period;
     if (sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
     sentPeriods[userId].add(next);
+    if (sentPeriods[userId].size > 100) {
+        const oldest = sentPeriods[userId].values().next().value;
+        if (oldest) sentPeriods[userId].delete(oldest);
+    }
+
+    if (remote.size === 'SKIP') {
+        await send(chatId, '⏭️ SKIP: No safe pattern for period ' + next.slice(-6) + '\nChecking the next period...');
+        return schedulePrediction(userId, chatId, 8000);
+    }
+
     if (sentPeriods[userId].size > 100) {
         const oldest = sentPeriods[userId].values().next().value;
         if (oldest) sentPeriods[userId].delete(oldest);
