@@ -1,8 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios       = require('axios');
 const crypto      = require('crypto');
-const zlib        = require('zlib');
-const puppeteer   = require('puppeteer');
 
 // ============================================================
 //  CONFIG
@@ -11,7 +9,7 @@ const BOT_TOKEN    = process.env.BOT_TOKEN || "8670635800:AAEeDoWmav3IL5Pj19shma
 const OWNER_ID     = 8869874751;
 const OWNER_PASS   = process.env.OWNER_PASS || "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
-const REG_LINK     = "https://bdgwinuu.com/#/register?invitationCode=7442815992780";
+const REG_LINK     = "https://13l.life/register?inviteCode=DDXKKFN&from=web07:33 AM";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
@@ -33,13 +31,6 @@ http.createServer((req, res) => {
     res.end('SIVA BOT OK');
 }).listen(PORT, () => console.log(`✅ Keep-alive server on port ${PORT}`));
 
-const RENDER_URL = process.env.RENDER_URL || "";
-if (RENDER_URL) {
-    setInterval(() => {
-        axios.get(RENDER_URL).catch(() => {});
-        console.log("[PING] Keep-alive ping sent");
-    }, 14 * 60 * 1000);
-}
 
 // ============================================================
 //  STORAGE
@@ -62,6 +53,36 @@ let profitTrack    = {};
 let GLOBAL_TOKEN   = "";
 let userTokens = {}; 
 let userStates = {};
+const predictionTimers = new Map();
+const resultIntervals = new Map();
+
+function schedulePrediction(userId, chatId, delayMs) {
+    const key = String(userId);
+    const old = predictionTimers.get(key);
+    if (old) clearTimeout(old);
+    const timer = setTimeout(() => {
+        predictionTimers.delete(key);
+        if (running[userId]) runPredict(userId, chatId).catch(err => console.error("[PREDICTION RETRY]", err?.message || err));
+    }, Math.max(1000, Number(delayMs) || 5000));
+    predictionTimers.set(key, timer);
+    return timer;
+}
+
+function clearUserTimers(userId) {
+    const key = String(userId);
+    const predictionTimer = predictionTimers.get(key);
+    if (predictionTimer) clearTimeout(predictionTimer);
+    predictionTimers.delete(key);
+    const resultInterval = resultIntervals.get(key);
+    if (resultInterval) clearInterval(resultInterval);
+    resultIntervals.delete(key);
+}
+
+function stopResultInterval(userId, interval) {
+    const key = String(userId);
+    if (resultIntervals.get(key) === interval) resultIntervals.delete(key);
+    clearInterval(interval);
+}
 
 
 // ============================================================
@@ -85,6 +106,30 @@ async function logBoth(chatId, msg, isError = false) {
 // ============================================================
 //  HELPERS
 // ============================================================
+//  HTML PREVIEW-LEVEL DATA EXTRACTION HELPERS
+// ============================================================
+function luciferExtractData(json) {
+    if (Array.isArray(json)) return json;
+    if (json && Array.isArray(json.data)) return json.data;
+    if (json && Array.isArray(json.data?.list)) return json.data.list;
+    if (json && Array.isArray(json.results)) return json.results;
+    if (json && Array.isArray(json.records)) return json.records;
+    return null;
+}
+
+function luciferSortNewest(a) {
+    return a.slice().sort((a, b) => {
+        const ai = String(a?.issue ?? a?.issueNumber ?? a?.period ?? "");
+        const bi = String(b?.issue ?? b?.issueNumber ?? b?.period ?? "");
+        if (/^\d+$/.test(ai) && /^\d+$/.test(bi)) {
+            if (ai.length !== bi.length) return bi.length - ai.length;
+            return bi.localeCompare(ai);
+        }
+        return 0;
+    });
+}
+
+// ============================================================
 async function fetchList() {
     try {
         const response = await axios.get(DRAW_URL, {
@@ -92,22 +137,39 @@ async function fetchList() {
             timeout: 10000
         });
         const payload = response.data || {};
-        const rows = Array.isArray(payload.data)
-            ? payload.data
-            : Array.isArray(payload.data?.list) ? payload.data.list : null;
-        if (!Array.isArray(rows) || rows.length === 0) {
+        const arr = luciferExtractData(payload);
+        if (!Array.isArray(arr) || arr.length === 0) {
             console.error("[LUCIFER API] Invalid 1-minute history response");
             return null;
         }
-        return rows.map(row => ({
-            issueNumber: String(row.issueNumber ?? row.period ?? row.issue ?? ""),
-            number: Number(row.number ?? row.winNumber),
-            size: String(row.size || (Number(row.number) >= 5 ? "BIG" : "SMALL")).toUpperCase(),
-            color: String(row.color || "").toUpperCase(),
-            openTime: row.openTime,
-            timestamp: row.timestamp
-        })).filter(row => /^\d+$/.test(row.issueNumber) && Number.isInteger(row.number) && row.number >= 0 && row.number <= 9)
-          .sort((a, b) => BigInt(b.issueNumber) > BigInt(a.issueNumber) ? 1 : BigInt(b.issueNumber) < BigInt(a.issueNumber) ? -1 : 0);
+
+        const normalized = arr.map((x, i) => {
+            if (typeof x === "string" || typeof x === "number") {
+                return {
+                    issueNumber: String(i),
+                    number: Number(String(x).replace(/\D/g, "").slice(-1))
+                };
+            }
+            const rawN = x.number ?? x.result ?? x.resultNumber ?? x.num ?? x.value ?? x.openNumber ?? x.winNumber;
+            const rawI = x.issue ?? x.issueNumber ?? x.period ?? x.periodNumber ?? x.id ?? i;
+            const numStr = String(rawN ?? "").replace(/\D/g, "").slice(-1);
+            return {
+                issueNumber: String(rawI),
+                number: /^[0-9]$/.test(numStr) ? Number(numStr) : NaN,
+                size: String(x.size || ((/^[0-9]$/.test(numStr) && Number(numStr) >= 5) ? "BIG" : "SMALL")).toUpperCase(),
+                color: String(x.color || "").toUpperCase(),
+                openTime: x.openTime,
+                timestamp: x.timestamp
+            };
+        }).filter(row =>
+            /^\d+$/.test(row.issueNumber) &&
+            Number.isInteger(row.number) && row.number >= 0 && row.number <= 9
+        );
+
+        return luciferSortNewest(normalized).map(row => ({
+            ...row,
+            size: row.size && row.size !== "UNDEFINED" ? row.size : (row.number >= 5 ? "BIG" : "SMALL")
+        }));
     } catch (error) {
         console.error("[LUCIFER API ERROR]", error.message);
         return null;
@@ -135,11 +197,23 @@ async function getLiveBalance(userId, chatId = null) {
 
     if (!token) return { success: false, message: "No token" };
 
-    const url = "https://api.ar-lottery01.com/api/Lottery/GetBalance";
+    const baseUrl = "https://api.ar-lottery01.com/api/Lottery/GetBalance";
+    const signedParams = buildBalanceSignedParams();
+    const queryString = new URLSearchParams(signedParams).toString();
+    const url = baseUrl + "?" + queryString;
+
     const headers = {
         "Authorization": "Bearer " + token,
         "Ar-Origin": "https://13lwin19.com",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+        "Origin": "https://13lwin19.com",
+        "Referer": "https://13lwin19.com/",
+        "Accept": "application/json, text/plain, */*",
+        "Sec-Ch-Ua": '"Chromium";v="139"',
+        "Sec-Ch-Ua-Mobile": "?1",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "cross-site",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"
     };
 
     try {
@@ -148,7 +222,10 @@ async function getLiveBalance(userId, chatId = null) {
     } catch (e) {
         if (e.response && e.response.status === 405) {
             try {
-                const r2 = await axios.post(url, {}, { headers, timeout: 5000 });
+                const signedParams2 = buildBalanceSignedParams();
+                const queryString2 = new URLSearchParams(signedParams2).toString();
+                const url2 = baseUrl + "?" + queryString2;
+                const r2 = await axios.post(url2, signedParams2, { headers, timeout: 5000 });
                 return await parseBalanceResponse(r2);
             } catch (e2) {
                 const errMsg = e2.response?.data?.msg || e2.message || "API Error";
@@ -287,6 +364,30 @@ function makeBetSign(params) {
     return crypto.createHash('md5').update(JSON.stringify(sorted)).digest('hex').toUpperCase().slice(0,32);
 }
 
+function makeBalanceSign(params) {
+    const p = {...params};
+    delete p.signature; delete p.timestamp;
+    const keys = Object.keys(p).filter(k => {
+        const v = p[k];
+        if (v === null || v === undefined || v === "") return false;
+        if (typeof v === 'object') return false;
+        return true;
+    }).sort();
+    const sorted = {};
+    keys.forEach(k => { sorted[k] = p[k] === 0 ? 0 : p[k]; });
+    return crypto.createHash('md5').update(JSON.stringify(sorted)).digest('hex').toUpperCase().slice(0, 32);
+}
+
+function buildBalanceSignedParams() {
+    const params = {
+        language: "en",
+        random:   Math.floor(Math.random() * 1e12)
+    };
+    const signature = makeBalanceSign(params);
+    const timestamp = Math.floor(Date.now() / 1000);
+    return {...params, signature, timestamp};
+}
+
 // ============================================================
 //  FETCH CAPTCHA
 // ============================================================
@@ -318,98 +419,12 @@ async function fetchCaptcha() {
 
 
 async function autoLogin(userId, chatId, silent = false) {
-
-
-    const creds = userCreds[userId] || {};
-    const { phone, pass } = creds;
-
-    if (!phone || !pass) {
-        await logBoth(chatId, `[AUTO LOGIN] User ${userId} has no phone or password set.`);
-
-        return false;
-    }
-
-    let browser;
-    try {
-        browser = await puppeteer.launch({
-            headless: true, 
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
-        });
-        const page = await browser.newPage();
-        await page.setDefaultNavigationTimeout(90000); 
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-        let capturedToken = null;
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            if (req.url().includes('GetBalance') && req.headers()['authorization']) {
-                capturedToken = req.headers()['authorization'].replace(/^Bearer\s+/i, "");
-            }
-            req.continue();
-        });
-
-        await page.goto('https://13llottery.com/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        await page.waitForSelector('input', { timeout: 30000 });
-        const inputs = await page.$$('input');
-        if (inputs.length < 2) throw new Error("Login inputs not found");
-
-        await inputs[0].type(phone, { delay: 50 });
-        await inputs[1].type(pass, { delay: 50 });
-        
-        await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const loginBtn = btns.find(b => b.innerText.includes('Log in') || b.innerText.includes('Login'));
-            if (loginBtn) loginBtn.click();
-            else document.querySelector('form')?.submit();
-        });
-
-        try {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
-        } catch (e) {
-            // Ignore timeout, we'll check token anyway
-        }
-        await new Promise(r => setTimeout(r, 5000));
-
-        await page.evaluate(() => {
-            const closeBtn = document.querySelector('.van-icon-cross') || document.querySelector('.close-icon');
-            if (closeBtn) closeBtn.click();
-        });
-        await new Promise(r => setTimeout(r, 1000));
-
-        await page.evaluate(() => {
-            const navItems = Array.from(document.querySelectorAll('div, span'));
-            const lotteryBtn = navItems.find(el => el.innerText.trim() === 'Lottery');
-            if (lotteryBtn) lotteryBtn.click();
-        });
-        await new Promise(r => setTimeout(r, 2000));
-
-        await page.evaluate(() => {
-            const navItems = Array.from(document.querySelectorAll('div, span'));
-            const winGoBtn = navItems.find(el => el.innerText.trim() === 'Win Go');
-            if (winGoBtn) winGoBtn.click();
-        });
-
-        for (let i = 0; i < 50; i++) {
-            if (capturedToken) break;
-            await new Promise(r => setTimeout(r, 1000));
-        }
-
-        if (capturedToken) {
-            // Success: Update token only when captured
-            userTokens[userId] = capturedToken;
-            await logBoth(chatId, `✅ [SUCCESS] Token captured successfully for user ${userId}!`);
-            return true;
-        } else {
-            throw new Error("Token not found in requests after login sequence.");
-        }
-
-    } catch (err) {
-        await logBoth(chatId, `❌ Login Error for user ${userId}: ${err.message}`, true);
-        return false;
-    } finally {
-        if (browser) await browser.close();
-
-    }
+    // Intentionally token-only: Puppeteer/browser automation was removed to keep
+    // Render Free memory usage bounded. Supply a token with /setmytoken.
+    const token = getToken(userId);
+    if (token && token.length >= 20) return true;
+    if (!silent && chatId) await send(chatId, "❌ Token missing. Use /setmytoken TOKEN.");
+    return false;
 }
 
 // ============================================================
@@ -595,6 +610,21 @@ function initState(userId) {
     if (state.currentMode !== "SAME" && state.currentMode !== "OPPOSITE") state.currentMode = null;
 }
 
+function sizeOf(row) {
+    const raw = String(row?.size ?? row?.bigSmall ?? row?.type ?? "").toUpperCase();
+    if (raw === "BIG" || raw === "B") return "B";
+    if (raw === "SMALL" || raw === "S") return "S";
+    const number = Number.parseInt(row?.number ?? row?.winNumber ?? row?.result ?? "", 10);
+    return Number.isInteger(number) && number >= 5 ? "B" : Number.isInteger(number) ? "S" : null;
+}
+
+function nextIssueNumber(list) {
+    const latest = Array.isArray(list) ? list[0]?.issueNumber : null;
+    if (latest === null || latest === undefined || !/^\d+$/.test(String(latest))) return null;
+    try { return (BigInt(String(latest)) + 1n).toString(); }
+    catch { return null; }
+}
+
 function buildBSFromList(list, count = 15) {
     if (!Array.isArray(list)) return [];
     return list.slice(0, count).map(row => sizeOf(row) || (Number(row.number) >= 5 ? "B" : "S")).reverse();
@@ -653,156 +683,8 @@ function getStatus(userId) {
     return `${state.currentMode || "SAME"} MODE | L${st?.level || 1} | History: ${state.resultHistory.join("")}`;
 }
 
-//  SAME / OPPOSITE PREDICTION ENGINE
-// ============================================================
-function normalizeSize(value) {
-    const v = String(value || "").toUpperCase();
-    return v === "BIG" || v === "B" ? "B" : v === "SMALL" || v === "S" ? "S" : null;
-}
+// Legacy SAME/OPPOSITE prediction engine removed.
 
-function sizeOf(row) {
-    const fromApi = normalizeSize(row.size);
-    return fromApi || (Number(row.number) >= 5 ? "B" : "S");
-}
-
-function nextIssueNumber(list) {
-    if (!list?.length) return null;
-    return (BigInt(list[0].issueNumber) + 1n).toString();
-}
-
-function decidePrediction(list, lockedMode = null) {
-    if (!Array.isArray(list) || list.length < 3) return null;
-    const latest = list[0];
-    const target = nextIssueNumber(list);
-    if (!target) return null;
-    const chronological = [...list].sort((a, b) => BigInt(a.issueNumber) < BigInt(b.issueNumber) ? -1 : 1);
-    // Analyze the complete valid Lucifer API history. The newest completed row
-    // is excluded as the direct prediction source; the reference is the row
-    // immediately before it, matching the requested 917 -> 919 flow.
-    const analysisRows = chronological;
-    const reference = analysisRows[analysisRows.length - 2];
-    const pairs = [];
-    for (let i = 0; i + 2 < analysisRows.length; i++) {
-        const left = analysisRows[i], right = analysisRows[i + 2];
-        if (BigInt(right.issueNumber) !== BigInt(left.issueNumber) + 2n) continue;
-        const leftSize = sizeOf(left), rightSize = sizeOf(right);
-        pairs.push({ from: left.issueNumber, to: right.issueNumber, leftSize, rightSize, mode: leftSize === rightSize ? "SAME" : "OPPOSITE" });
-    }
-    if (!pairs.length) return null;
-    const sameCount = pairs.filter(p => p.mode === "SAME").length;
-    const oppositeCount = pairs.filter(p => p.mode === "OPPOSITE").length;
-
-    // Convert pair modes to S/O and find the longest suffix pattern (1..10)
-    // that has appeared before in the complete history.
-    const modeSequence = pairs.map(pair => pair.mode === "SAME" ? "S" : "O");
-    const maxPatternLength = Math.min(10, modeSequence.length);
-    const minPatternLength = modeSequence.length >= 2 ? 2 : 1;
-    const pairPatternTotals = {
-        SO: { occurrences: 0, followingSame: 0, followingOpposite: 0 },
-        OO: { occurrences: 0, followingSame: 0, followingOpposite: 0 },
-        OS: { occurrences: 0, followingSame: 0, followingOpposite: 0 },
-        SS: { occurrences: 0, followingSame: 0, followingOpposite: 0 }
-    };
-    for (let i = 0; i + 2 < modeSequence.length; i++) {
-        const pair = modeSequence.slice(i, i + 2).join("");
-        const bucket = pairPatternTotals[pair];
-        if (!bucket) continue;
-        bucket.occurrences++;
-        if (modeSequence[i + 2] === "S") bucket.followingSame++;
-        else if (modeSequence[i + 2] === "O") bucket.followingOpposite++;
-    }
-    const totalPairPatternSame = Object.values(pairPatternTotals).reduce((n, x) => n + x.followingSame, 0);
-    const totalPairPatternOpposite = Object.values(pairPatternTotals).reduce((n, x) => n + x.followingOpposite, 0);
-    let latestPattern = null;
-    let matchedPatternLength = 0;
-    let followingSame = 0;
-    let followingOpposite = 0;
-    const patternCounts = {};
-
-    for (let length = maxPatternLength; length >= minPatternLength; length--) {
-        const candidate = modeSequence.slice(-length).join("");
-        let same = 0;
-        let opposite = 0;
-        let occurrences = 0;
-        for (let i = 0; i + length < modeSequence.length; i++) {
-            if (modeSequence.slice(i, i + length).join("") !== candidate) continue;
-            occurrences++;
-            if (modeSequence[i + length] === "S") same++;
-            else if (modeSequence[i + length] === "O") opposite++;
-        }
-        patternCounts["L" + length] = { pattern: candidate, occurrences, followingSame: same, followingOpposite: opposite };
-        if (!latestPattern && occurrences > 0 && (same + opposite) > 0) {
-            latestPattern = candidate;
-            matchedPatternLength = length;
-            followingSame = same;
-            followingOpposite = opposite;
-        }
-    }
-
-    // Always retain a visible two-symbol fallback pattern: SS, SO, OS, or OO.
-    // If no longer pattern has historical continuation, use the latest pair label
-    // for display and use the full-history mode count as the safe prediction fallback.
-    const fallbackPattern = modeSequence.slice(-2).join("") || modeSequence.slice(-1).join("");
-    if (!latestPattern && fallbackPattern) {
-        latestPattern = fallbackPattern;
-        matchedPatternLength = Math.min(2, modeSequence.length);
-    }
-
-    const globalTie = sameCount === oppositeCount;
-    const patternTie = followingSame === followingOpposite;
-    const pairTotalsTie = totalPairPatternSame === totalPairPatternOpposite;
-    let predictionMode;
-    if (lockedMode === "SAME" || lockedMode === "OPPOSITE") {
-        // Keep the active mode after a win; it changes only after a loss.
-        predictionMode = lockedMode;
-    } else if (latestPattern && (followingSame + followingOpposite) > 0 && !patternTie) {
-        // Use the continuation observed after the latest SS/SO/OS/OO pattern.
-        predictionMode = followingSame > followingOpposite ? "SAME" : "OPPOSITE";
-    } else if (totalPairPatternSame + totalPairPatternOpposite > 0 && !pairTotalsTie) {
-        // Fallback: total continuation count across SO, OO, OS and SS.
-        predictionMode = totalPairPatternSame > totalPairPatternOpposite ? "SAME" : "OPPOSITE";
-    } else if (!globalTie) {
-        // Final fallback: overall SAME vs OPPOSITE pair count.
-        predictionMode = sameCount > oppositeCount ? "SAME" : "OPPOSITE";
-    } else {
-        // Deterministic tie-break when both modes are tied.
-        predictionMode = pairs[pairs.length - 1].mode;
-    }
-
-    const referenceSize = sizeOf(reference);
-    const predictedSize = predictionMode === "SAME" ? referenceSize : (referenceSize === "B" ? "S" : "B");
-    return {
-        type: "SIZE",
-        val: predictedSize === "B" ? "BIG" : "SMALL",
-        mode: predictionMode,
-        history: analysisRows.slice(-20).map(sizeOf).join(""),
-        analyzedRows: analysisRows.length,
-        targetPeriod: target,
-        latestCompletedPeriod: latest.issueNumber,
-        latestCompletedSize: sizeOf(latest),
-        referencePeriod: reference.issueNumber,
-        referenceSize,
-        sameCount, oppositeCount, pairCount: pairs.length,
-        latestPattern,
-        patternCounts,
-        pairPatternTotals,
-        totalPairPatternSame,
-        totalPairPatternOpposite,
-        followingSame,
-        followingOpposite,
-        lastPair: pairs[pairs.length - 1],
-        analysis: { sameCount, oppositeCount, pairCount: pairs.length, pairs, modeSequence },
-        predictionDetails: {
-            rule: predictionMode === "SAME" ? "same as reference result" : "opposite of reference result",
-            patternRule: latestPattern ? `latest ${latestPattern} pattern continuation` : "no two-pair pattern",
-            selection: followingSame + followingOpposite > 0 && !patternTie ? `longest historical match L${matchedPatternLength}` : totalPairPatternSame + totalPairPatternOpposite > 0 && !pairTotalsTie ? "SO/OO/OS/SS total continuation count" : `fallback pattern ${fallbackPattern || "N/A"} + full-history count`,
-            tieBreak: patternTie ? "full-history count or latest pair" : null,
-            fallbackPattern,
-            matchedPatternLength
-        }
-    };
-}
-// ============================================================
 //  RESULT HANDLERS — required by checkResult()
 // ============================================================
 async function handleWin(userId, chatId, actual, num, betLevel) {
@@ -840,96 +722,90 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     await sendSticker(chatId, LOSS_STICKER);
 }
 
-//  EXISTING CALCULATION ONLY
-//  The Luciferapi SAME/OPPOSITE analysis below is the sole decision source.
+//  LIVE SITE SIZE-ONLY PREDICTOR
 // ============================================================
+// The live Netlify app reads the public history endpoint below and applies this
+// same deterministic size-only rule set. No color/number betting prediction is
+// exposed by this bot.
+const LIVE_HISTORY_URL = process.env.LIVE_HISTORY_URL || "https://luciferapi.com/?t=";
+const LIVE_FETCH_TIMEOUT_MS = 8000;
+const MAX_HISTORY_ROWS = 120;
 
-//  FORMULA-ONLY HISTORICAL ML CALIBRATION
-//  Uses only the supplied period/result calculation and Luciferapi history.
-// ============================================================
-function formulaMLPredict(list) {
-    if (!Array.isArray(list) || list.length < 12) return null;
-    const rows = [...list].filter(r => r && r.issueNumber != null && Number.isInteger(Number(r.number)))
-        .sort((a, b) => BigInt(a.issueNumber) < BigInt(b.issueNumber) ? -1 : 1);
-    if (rows.length < 12) return null;
-
-    function formulaFor(row) {
-        const currentPeriod = String(row.issueNumber);
-        const currentResult = Number(row.number);
-        if (!Number.isInteger(currentResult) || currentResult < 1 || currentResult > 9) return null;
-        const nextPeriod = (BigInt(currentPeriod) + 1n).toString();
-        const nextLast3 = Number(nextPeriod.slice(-3));
-        const answer = nextLast3 * Math.exp(currentResult);
-        const first14 = answer.toString().replace('.', '').substring(0, 14);
-        const lastDigit = Number(first14.charAt(first14.length - 1));
-        if (!Number.isInteger(lastDigit)) return null;
-        return { nextPeriod, lastDigit, basePrediction: lastDigit <= 4 ? "SMALL" : "BIG" };
-    }
-
-    // Build the historical NORMAL/RECOVERY sequence from the supplied formula.
-    const historicalModes = [];
-    let correct = 0, total = 0;
-    for (let i = 0; i < rows.length - 1; i++) {
-        const calc = formulaFor(rows[i]);
-        if (!calc || BigInt(rows[i + 1].issueNumber) !== BigInt(calc.nextPeriod)) continue;
-        const actual = Number(rows[i + 1].number) >= 5 ? "BIG" : "SMALL";
-        const mode = calc.basePrediction === actual ? "NORMAL" : "RECOVERY";
-        historicalModes.push(mode);
-        if (mode === "NORMAL") correct++;
-        total++;
-    }
-    const latest = rows[rows.length - 1];
-    const current = formulaFor(latest);
-    if (!current || historicalModes.length < 2) return null;
-
-    // No aggregate count is used. Match the longest recent mode context
-    // against its most recent earlier occurrence and take that occurrence's
-    // immediate next mode as the current-period mode.
-    const currentMode = historicalModes[historicalModes.length - 1];
-    let nextMode = null;
-    let matchedContext = "";
-    let matchedLength = 0;
-    const maxContext = Math.min(10, historicalModes.length - 1);
-    for (let length = maxContext; length >= 1 && !nextMode; length--) {
-        const candidate = historicalModes.slice(-length).join(">");
-        for (let i = historicalModes.length - length - 1; i >= 0; i--) {
-            const prior = historicalModes.slice(i, i + length).join(">");
-            if (prior !== candidate) continue;
-            nextMode = historicalModes[i + length];
-            matchedContext = candidate;
-            matchedLength = length;
-            break;
+const LIVE_COLOR_MAP = {
+    0: { baseColor: "red", size: "small", violet: true },
+    1: { baseColor: "green", size: "small", violet: false },
+    2: { baseColor: "red", size: "small", violet: false },
+    3: { baseColor: "green", size: "small", violet: false },
+    4: { baseColor: "red", size: "small", violet: false },
+    5: { baseColor: "green", size: "big", violet: true },
+    6: { baseColor: "red", size: "big", violet: false },
+    7: { baseColor: "green", size: "big", violet: false },
+    8: { baseColor: "red", size: "big", violet: false },
+    9: { baseColor: "green", size: "big", violet: false }
+};
+function liveNum(row) { const n = Number(row?.number ?? row?.winNumber ?? row?.result ?? row?.num); return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null; }
+function liveSize(n) { return LIVE_COLOR_MAP[n]?.size || null; }
+function liveColor(n) { return LIVE_COLOR_MAP[n]?.baseColor || null; }
+function liveViolet(n) { return !!LIVE_COLOR_MAP[n]?.violet; }
+function oppositeSize(size) { return size === "big" ? "small" : "big"; }
+function analyzeFirstFourTrend(rows) {
+    if (rows.length < 4) return null;
+    const sizes = rows.slice(0, 4).map(r => liveSize(liveNum(r)));
+    if (sizes.every(s => s === "big")) return "big";
+    if (sizes.every(s => s === "small")) return "small";
+    if (sizes[0] !== sizes[1] && sizes[1] !== sizes[2] && sizes[2] !== sizes[3]) return sizes[0];
+    return sizes[3];
+}
+function applyLiveSizeLogic(pair, third, fourth, rows) {
+    const above = pair.pairAbove;
+    const below1 = pair.pairBelow1;
+    const below2 = pair.pairBelow2;
+    const n3 = liveNum(third), n4 = liveNum(fourth), na = liveNum(above), nb1 = liveNum(below1), nb2 = liveNum(below2);
+    if ([n3, n4, na, nb1, nb2].some(n => n === null)) return null;
+    if (liveViolet(n3) && liveViolet(n4)) return { result: "skip", rule: "skip_both_violet_in_3rd_4th" };
+    const colorMatch = liveColor(n3) === liveColor(nb1) && liveColor(n4) === liveColor(nb2);
+    const sizeMatch = liveSize(n3) === liveSize(nb1) && liveSize(n4) === liveSize(nb2);
+    const oppositeColorMatch = liveColor(n3) !== liveColor(nb1) && liveColor(n4) !== liveColor(nb2);
+    const oppositeSizeMatch = liveSize(n3) !== liveSize(nb1) && liveSize(n4) !== liveSize(nb2);
+    const violetCount = [nb1, nb2].filter(liveViolet).length;
+    let result, rule;
+    if (colorMatch && !sizeMatch) { result = analyzeFirstFourTrend(rows); rule = "color_match_follow_trend"; }
+    else if (!colorMatch && sizeMatch) { result = oppositeSize(liveSize(na)); rule = "size_match_break_trend"; }
+    else if (colorMatch && sizeMatch) { result = oppositeSize(liveSize(na)); rule = "both_match_break_trend"; }
+    else if (oppositeColorMatch && oppositeSizeMatch) { result = oppositeSize(liveSize(na)); rule = "neither_match_opposite_above"; }
+    else if (oppositeSizeMatch) { result = oppositeSize(liveSize(na)); rule = "opposite_size_opposite_above"; }
+    else if (oppositeColorMatch) { result = oppositeSize(liveSize(na)); rule = "opposite_color_opposite_above"; }
+    else if (violetCount === 2) { result = liveSize(na); rule = "two_violets_same_predicted"; }
+    else { result = oppositeSize(liveSize(na)); rule = "fallback_opposite_above"; }
+    return result ? { result, rule } : null;
+}
+function liveSizePredict(list) {
+    const rows = (Array.isArray(list) ? list : []).map(x => ({...x, number: liveNum(x)})).filter(x => x.number !== null);
+    if (rows.length < 4) return null;
+    rows.sort((a, b) => Number(b.issueNumber ?? b.issue ?? b.period ?? 0) - Number(a.issueNumber ?? a.issue ?? a.period ?? 0));
+    const A = rows[0], B = rows[1], third = rows[2], fourth = rows[3];
+    let matchedPair = null, matchCount = 0;
+    for (let i = 2; i < rows.length - 3; i++) {
+        if (rows[i].number === A.number && rows[i + 1].number === B.number) {
+            matchCount++;
+            if (!matchedPair) matchedPair = { index: i, pairAbove: rows[i - 1], pairBelow1: rows[i + 2], pairBelow2: rows[i + 3] };
         }
     }
-    if (!nextMode) {
-        // Deterministic no-match fallback: alternate the current mode.
-        nextMode = currentMode === "NORMAL" ? "RECOVERY" : "NORMAL";
-        matchedContext = currentMode;
-        matchedLength = 1;
-    }
-
-    const accuracy = total ? correct / total : 0.5;
-    const prediction = nextMode === "RECOVERY"
-        ? (current.basePrediction === "BIG" ? "SMALL" : "BIG")
-        : current.basePrediction;
-    return {
-        type: "SIZE",
-        val: prediction,
-        mode: nextMode,
-        currentMode,
-        calculation: "nextLast3 × exp(currentResult) → first14 → lastDigit",
-        currentPeriod: latest.issueNumber,
-        targetPeriod: current.nextPeriod,
-        currentResult: Number(latest.number),
-        lastDigit: current.lastDigit,
-        basePrediction: current.basePrediction,
-        accuracy,
-        confidence: Math.round(Math.max(accuracy, 1 - accuracy) * 100),
-        correct,
-        total,
-        matchedContext,
-        matchedLength
-    };
+    if (!matchedPair) return null;
+    const pred = applyLiveSizeLogic(matchedPair, third, fourth, rows);
+    if (!pred || pred.result === "skip") return pred ? { type: "SIZE", val: null, mode: pred.rule, calculation: "live-site size-only rule: skip" } : null;
+    return { type: "SIZE", val: pred.result.toUpperCase(), mode: pred.rule, calculation: "live Netlify predictor; size-only", pattern: `${A.number}${B.number}`, matches: matchCount };
+}
+async function fetchLivePrediction() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LIVE_FETCH_TIMEOUT_MS);
+    try {
+        const response = await axios.get(`${LIVE_HISTORY_URL}${Date.now()}`, { timeout: LIVE_FETCH_TIMEOUT_MS, signal: controller.signal, headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" } });
+        const payload = response.data;
+        const list = Array.isArray(payload?.data?.data) ? payload.data.data : Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.data?.list) ? payload.data.list : Array.isArray(payload?.list) ? payload.list : [];
+        const rows = list.slice(0, MAX_HISTORY_ROWS);
+        return { list: rows, prediction: liveSizePredict(rows) };
+    } finally { clearTimeout(timer); }
 }
 
 //  PREDICT LOOP
@@ -968,25 +844,29 @@ async function runPredict(userId, chatId) {
             profitTrack[userId].pnl = 0; 
             await send(chatId, "🔄 Timed Restart! Starting new section...");
         } else {
-            return setTimeout(()=>runPredict(userId,chatId), 60000);
+            return schedulePrediction(userId, chatId, 60000);
         }
     }
 
-    const list = await fetchList();
-    if(!list) return setTimeout(()=>runPredict(userId,chatId), 15000);
+    let live;
+    try { live = await fetchLivePrediction(); } catch (error) { console.error("[LIVE PREDICTOR]", error.message); return schedulePrediction(userId, chatId, 15000); }
+    const list = live.list;
+    if (!Array.isArray(list) || list.length < 4) return schedulePrediction(userId, chatId, 15000);
 
     const next = nextIssueNumber(list);
-    if (!next || BigInt(next) <= BigInt(list[0].issueNumber)) return setTimeout(()=>runPredict(userId,chatId), 5000);
-    if(sentPeriods[userId].has(next)) return setTimeout(()=>runPredict(userId,chatId), 2000);
+    if (!next || BigInt(next) <= BigInt(list[0].issueNumber)) return schedulePrediction(userId, chatId, 5000);
+    if(sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
     sentPeriods[userId].add(next);
 
-    // Live decision uses only the supplied formula calibrated against old Luciferapi results.
-    const signal = formulaMLPredict(list);
-    if (!signal) return setTimeout(()=>runPredict(userId,chatId), 5000);
-    signal.calculationMode = signal.mode;
-    signal.calculationConfidence = signal.confidence;
-    signal.predictionDetails = { liveDecision: "formula-only-historical-calibration", calculation: signal.calculation };
-    console.log(`[FORMULA ML LIVE] ${signal.val} mode=${signal.mode} accuracy=${(signal.accuracy * 100).toFixed(1)}% digit=${signal.lastDigit} samples=${signal.total}`);
+    // Live decision uses only the Netlify app's BIG/SMALL size-only logic.
+    const signal = live.prediction;
+    if (!signal) {
+        await send(chatId, "⏭️ SKIP — Live site has no size prediction yet.");
+        return schedulePrediction(userId, chatId, 5000);
+    }
+    if (!signal.val) return schedulePrediction(userId, chatId, 5000);
+    signal.predictionDetails = { liveDecision: "live-netlify-size-only", calculation: signal.calculation };
+    console.log(`[LIVE SIZE] ${signal.mode} ${signal.val} matches=${signal.matches || 0}`);
     state.currentMode = null;
     state.lastPrediction = signal.val;
     // Snapshot the level used for this prediction before any result update.
@@ -1037,22 +917,24 @@ async function runPredict(userId, chatId) {
 
 // 4. checkResult - Robust Update & Full UI
 async function checkResult(userId, chatId, target, predicted, predType, betPlaced, usedMode, predictionLevel) {
+    const timerKey = String(userId);
+    if (resultIntervals.has(timerKey)) return;
     let tries = 0;
     const cfg = autobetCfg[userId];
     const st = autobetState[userId];
     const pt = profitTrack[userId];
     
     const iv = setInterval(async () => {
-        if (!running[userId]) return clearInterval(iv);
+        if (!running[userId]) return stopResultInterval(userId, iv);
         if (++tries > 25) {
-            clearInterval(iv);
+            stopResultInterval(userId, iv);
             await logBoth(chatId, "⏱ Timeout — checking next period...");
-            setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 3000);
+            schedulePrediction(userId, chatId, 3000);
             return;
         }
         const list = await fetchList(); if (!list) return;
         if (BigInt(list[0].issueNumber) < BigInt(target)) return;
-        clearInterval(iv);
+        stopResultInterval(userId, iv);
 
         const res = list.find(i => i.issueNumber === target) || list[0];
         const num = parseInt(res.number || res.winNumber || 0);
@@ -1124,8 +1006,9 @@ async function checkResult(userId, chatId, target, predicted, predType, betPlace
             }
         }
 
-        setTimeout(() => { if (running[userId]) runPredict(userId, chatId); }, 8000);
+        schedulePrediction(userId, chatId, 8000);
     }, 10000);
+    resultIntervals.set(timerKey, iv);
 }
 
 
@@ -1263,6 +1146,7 @@ function recoverPolling(err) {
     }, 5000);
 }
 function startBot(){
+    if (!BOT_TOKEN || !OWNER_ID || !OWNER_PASS) throw new Error("BOT_TOKEN, OWNER_ID and OWNER_PASS environment variables are required");
     if(bot){try{bot.stopPolling();}catch(e){}}
     bot=new TelegramBot(BOT_TOKEN,{polling:{interval:1000,autoStart:true,params:{timeout:30}}});
     bot.on("polling_error",err=>{
@@ -1562,6 +1446,7 @@ if(text==="🔢 Set Watch Losses"){
             if(!hasAccess(id))return send(msg.chat.id,"❌ No access!\n📩 "+ADMIN_HANDLE+"\nID: "+id);
             if(running[id])return send(msg.chat.id,"⚠️ Already running!");
 
+            clearUserTimers(id);
             running[id]=true;sentPeriods[id]=new Set();
             autobetState[id]={level:1,consecutiveLoss:0,inMart:false,isWaiting:false,nextStartTime:null};
             initState(id);
@@ -1569,7 +1454,7 @@ if(text==="🔢 Set Watch Losses"){
             userStates[id].lastPrediction=null;
 
             // Load previous B/S history from API
-            const prevList = await fetchList();
+            const prevList = (await fetchLivePrediction().catch(() => ({list: []}))).list;
             initState(id);
 
             if (prevList && prevList.length >= 4) {
@@ -1586,7 +1471,7 @@ if(text==="🔢 Set Watch Losses"){
             );
             runPredict(id,msg.chat.id);
         }
-        if(text==="🛑 Stop")   {running[id]=false;send(msg.chat.id,"🛑 Stopped.");}
+        if(text==="🛑 Stop")   {running[id]=false;clearUserTimers(id);send(msg.chat.id,"🛑 Stopped.");}
         if(text==="📊 Stats")  showStats(msg.chat.id,id);
         if(text==="💰 Profit") profitReport(msg.chat.id,id);
         if(text==="📩 Contact") send(msg.chat.id,"📩 "+ADMIN_HANDLE+"\nID: "+id);
