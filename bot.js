@@ -72,6 +72,7 @@ const REMOTE_PREDICTOR_URL = process.env.REMOTE_PREDICTOR_URL ||
 let predictorBrowser = null;
 let predictorPage = null;
 let predictorReadLock = Promise.resolve();
+const predictorFailureNotified = new Set();
 
 function withPredictorLock(task) {
     const next = predictorReadLock.then(task, task);
@@ -103,6 +104,15 @@ async function getPredictorPage() {
     });
 
     predictorPage = await predictorBrowser.newPage();
+    predictorPage.on('console', msg => {
+        console.log('[PREDICTOR PAGE]', msg.type(), msg.text());
+    });
+    predictorPage.on('pageerror', error => {
+        console.error('[PREDICTOR PAGE ERROR]', error.message);
+    });
+    predictorPage.on('requestfailed', request => {
+        console.error('[PREDICTOR REQUEST FAILED]', request.url(), request.failure()?.errorText);
+    });
     await predictorPage.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
     await predictorPage.setUserAgent(
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36'
@@ -120,11 +130,24 @@ async function readRemotePredictionOnce() {
         timeout: 30000
     });
 
-    await page.waitForFunction(() => {
-        const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
-        const size = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
-        return /^\d+$/.test(period) && /^(BIG|SMALL)$/.test(size);
-    }, { timeout: 25000, polling: 500 });
+    try {
+        await page.waitForFunction(() => {
+            const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
+            const size = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
+            return /^\d+$/.test(period) && /^(BIG|SMALL)$/.test(size);
+        }, { timeout: 60000, polling: 1000 });
+    } catch (waitError) {
+        const debug = await page.evaluate(() => ({
+            period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
+            size: document.getElementById('predictedSize')?.textContent?.trim() || '',
+            status: document.getElementById('predictionStatus')?.textContent?.trim() || '',
+            title: document.title
+        })).catch(() => ({}));
+        throw new Error(
+            `Predictor DOM timeout: ${waitError.message}; ` +
+            `period=${debug.period}; size=${debug.size}; status=${debug.status}`
+        );
+    }
 
     return page.evaluate(() => ({
         period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
@@ -150,8 +173,8 @@ async function getRemoteSizePrediction() {
     });
 }
 
-process.once('SIGTERM', () => process.exit(0));
-process.once('SIGINT', () => process.exit(0));
+process.once('SIGTERM', () => { closePredictorBrowser().finally(() => process.exit(0)); });
+process.once('SIGINT', () => { closePredictorBrowser().finally(() => process.exit(0)); });
 
 function schedulePrediction(userId, chatId, delayMs) {
     const key = String(userId);
@@ -920,11 +943,16 @@ async function runPredict(userId, chatId) {
     try {
         remote = await getRemoteSizePrediction();
     } catch (error) {
-        console.error('[REMOTE PREDICTOR]', error?.message || error);
-        await send(chatId, '⏳ Live predictor unavailable. Retrying shortly...');
-        return schedulePrediction(userId, chatId, 15000);
+        console.error('[REMOTE PREDICTOR]', error?.stack || error?.message || error);
+        const key = String(userId);
+        if (!predictorFailureNotified.has(key)) {
+            predictorFailureNotified.add(key);
+            await send(chatId, '⏳ Live predictor unavailable. Retrying shortly...');
+        }
+        return schedulePrediction(userId, chatId, 30000);
     }
 
+    predictorFailureNotified.delete(String(userId));
     const next = remote.period;
     if (sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
     sentPeriods[userId].add(next);
@@ -1210,6 +1238,11 @@ function startBot(){
     bot=new TelegramBot(BOT_TOKEN,{polling:{interval:1000,autoStart:true,params:{timeout:30}}});
     bot.on("polling_error",err=>{
         const msg = err?.message || String(err);
+        if (msg.includes("409 Conflict") || msg.includes("terminated by other getUpdates request")) {
+            console.error("[POLL] 409 Conflict: another bot instance is using this token. Stop duplicate services/processes; polling will not be restarted automatically.");
+            try { bot.stopPolling(); } catch (e) {}
+            return;
+        }
         if (msg.includes("ECONNRESET") || msg.includes("EFATAL") || msg.includes("socket hang up")) {
             recoverPolling(err);
             return;
