@@ -69,7 +69,6 @@ const resultIntervals = new Map();
 // for the whole process and serialize reads so Render free-plan memory stays bounded.
 const REMOTE_PREDICTOR_URL = process.env.REMOTE_PREDICTOR_URL ||
     "https://tranquil-gingersnap-48aa12.netlify.app/";
-let predictorBrowser = null;
 let predictorReadLock = Promise.resolve();
 
 function withPredictorLock(task) {
@@ -78,32 +77,23 @@ function withPredictorLock(task) {
     return next;
 }
 
-async function closePredictorBrowser() {
-    const browser = predictorBrowser;
-    predictorBrowser = null;
-    if (browser) {
-        try { await browser.close(); } catch (_) {}
-    }
-}
-
 async function getRemoteSizePrediction() {
     return withPredictorLock(async () => {
-        if (!predictorBrowser || !predictorBrowser.isConnected()) {
-            predictorBrowser = await puppeteer.launch({
+        // Open the live Netlify page independently for every period. This avoids
+        // stale-page reload conflicts and guarantees a bounded browser lifecycle.
+        let browser = null;
+        let page = null;
+        try {
+            browser = await puppeteer.launch({
                 headless: true,
                 args: [
                     '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu',
                     '--disable-dev-shm-usage', '--single-process'
                 ]
             });
-        }
-
-        // A fresh page prevents the Netlify app's own minute reload timer from
-        // colliding with the next bot cycle. The page is always closed in finally.
-        const page = await predictorBrowser.newPage();
-        try {
+            page = await browser.newPage();
             await page.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
-            await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36');
+            await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/139');
             await page.setRequestInterception(true);
             page.on('request', request => {
                 const type = request.resourceType();
@@ -114,6 +104,7 @@ async function getRemoteSizePrediction() {
             await page.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}`, {
                 waitUntil: 'domcontentloaded', timeout: 20000
             });
+            // Required delay: let the page fetch and render the current period.
             await new Promise(resolve => setTimeout(resolve, 5000));
 
             const readPrediction = () => page.evaluate(() => ({
@@ -131,13 +122,14 @@ async function getRemoteSizePrediction() {
             }
             return prediction;
         } finally {
-            await page.close().catch(() => {});
+            if (page) await page.close().catch(() => {});
+            if (browser) await browser.close().catch(() => {});
         }
     });
 }
 
-process.once('SIGTERM', () => { closePredictorBrowser().finally(() => process.exit(0)); });
-process.once('SIGINT', () => { closePredictorBrowser().finally(() => process.exit(0)); });
+process.once('SIGTERM', () => process.exit(0));
+process.once('SIGINT', () => process.exit(0));
 
 function schedulePrediction(userId, chatId, delayMs) {
     const key = String(userId);
