@@ -109,21 +109,29 @@ async function getRemoteSizePrediction() {
             });
         }
 
-        await predictorPage.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}`, {
+                await predictorPage.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}`, {
             waitUntil: 'domcontentloaded', timeout: 20000
         });
-        await predictorPage.waitForFunction(() => {
-            const el = document.getElementById('predictedSize');
-            return el && /^(BIG|SMALL)$/i.test((el.textContent || '').trim());
-        }, { timeout: 20000 });
 
-        const prediction = await predictorPage.evaluate(() => ({
+        // The page fetches the live data asynchronously. Give it the requested
+        // five seconds after DOM load before reading the rendered prediction.
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        const readPrediction = () => predictorPage.evaluate(() => ({
             period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
             size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
             status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
         }));
+        let prediction = await readPrediction();
+
+        // A slow cold start may still be rendering; allow one short retry without
+        // launching another browser or creating another page.
         if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
-            throw new Error('Live Netlify page returned an invalid size prediction');
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            prediction = await readPrediction();
+        }
+        if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
+            throw new Error(`Netlify prediction not ready after 5s: ${prediction.status || 'no status'}`);
         }
         return prediction;
     });
