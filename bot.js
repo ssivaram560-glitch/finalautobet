@@ -69,6 +69,8 @@ const resultIntervals = new Map();
 // for the whole process and serialize reads so Render free-plan memory stays bounded.
 const REMOTE_PREDICTOR_URL = process.env.REMOTE_PREDICTOR_URL ||
     "https://tranquil-gingersnap-48aa12.netlify.app/";
+let predictorBrowser = null;
+let predictorPage = null;
 let predictorReadLock = Promise.resolve();
 
 function withPredictorLock(task) {
@@ -77,61 +79,71 @@ function withPredictorLock(task) {
     return next;
 }
 
+async function closePredictorBrowser() {
+    if (predictorPage) await predictorPage.close().catch(() => {});
+    if (predictorBrowser) await predictorBrowser.close().catch(() => {});
+    predictorPage = null;
+    predictorBrowser = null;
+}
+
+async function getPredictorPage() {
+    if (predictorBrowser && predictorPage && !predictorPage.isClosed()) {
+        return predictorPage;
+    }
+
+    predictorBrowser = await puppeteer.launch({
+        headless: true,
+        timeout: 30000,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu'
+        ]
+    });
+
+    predictorPage = await predictorBrowser.newPage();
+    await predictorPage.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
+    await predictorPage.setUserAgent(
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36'
+    );
+    return predictorPage;
+}
+
+async function readRemotePredictionOnce() {
+    const page = await getPredictorPage();
+    const separator = REMOTE_PREDICTOR_URL.includes('?') ? '&' : '?';
+    const url = `${REMOTE_PREDICTOR_URL}${separator}t=${Date.now()}`;
+
+    await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+    });
+
+    await page.waitForFunction(() => {
+        const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
+        const size = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
+        return /^\d+$/.test(period) && /^(BIG|SMALL)$/.test(size);
+    }, { timeout: 25000, polling: 500 });
+
+    return page.evaluate(() => ({
+        period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
+        size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
+        status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
+    }));
+}
+
 async function getRemoteSizePrediction() {
     return withPredictorLock(async () => {
         let lastError;
         for (let attempt = 1; attempt <= 2; attempt++) {
-            let browser = null;
-            let page = null;
             try {
-                // A completely fresh browser is created for every attempt/period.
-                browser = await puppeteer.launch({
-                    headless: true,
-                    timeout: 20000,
-                    args: [
-                        '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu',
-                        '--disable-dev-shm-usage', '--single-process',
-                        '--no-zygote', '--disable-background-networking'
-                    ]
-                });
-                page = await browser.newPage();
-                await page.setCacheEnabled(false);
-                await page.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
-                await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36');
-                await page.setRequestInterception(true);
-                page.on('request', request => {
-                    const type = request.resourceType();
-                    if (type === 'image' || type === 'font' || type === 'media') request.abort().catch(() => {});
-                    else request.continue().catch(() => {});
-                });
-
-                await page.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}-${attempt}`, {
-                    waitUntil: 'domcontentloaded', timeout: 20000
-                });
-                // Required delay: let the page fetch and render this period.
-                await new Promise(resolve => setTimeout(resolve, 5000));
-
-                const readPrediction = () => page.evaluate(() => ({
-                    period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
-                    size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
-                    status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
-                }));
-                let prediction = await readPrediction();
-                if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-                    prediction = await readPrediction();
-                }
-                if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
-                    throw new Error(`Netlify prediction not ready: ${prediction.status || 'no status'}`);
-                }
-                return prediction;
+                return await readRemotePredictionOnce();
             } catch (error) {
                 lastError = error;
                 console.error(`[REMOTE PREDICTOR] attempt ${attempt}/2:`, error?.stack || error?.message || error);
-                if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000));
-            } finally {
-                if (page) await page.close().catch(() => {});
-                if (browser) await browser.close().catch(() => {});
+                await closePredictorBrowser();
+                if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1500));
             }
         }
         throw lastError || new Error('Remote predictor failed');
