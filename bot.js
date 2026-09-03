@@ -104,6 +104,15 @@ async function getPredictorPage() {
     });
 
     predictorPage = await predictorBrowser.newPage();
+    await predictorPage.setRequestInterception(true);
+    predictorPage.on('request', request => {
+        const requestUrl = request.url();
+        if (requestUrl.startsWith('https://luciferapi.com/?')) {
+            request.continue({ url: 'https://luciferapi.com/' }).catch(() => {});
+        } else {
+            request.continue().catch(() => {});
+        }
+    });
     predictorPage.on('console', msg => {
         console.log('[PREDICTOR PAGE]', msg.type(), msg.text());
     });
