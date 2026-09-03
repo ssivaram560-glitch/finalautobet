@@ -70,7 +70,6 @@ const resultIntervals = new Map();
 const REMOTE_PREDICTOR_URL = process.env.REMOTE_PREDICTOR_URL ||
     "https://tranquil-gingersnap-48aa12.netlify.app/";
 let predictorBrowser = null;
-let predictorPage = null;
 let predictorReadLock = Promise.resolve();
 
 function withPredictorLock(task) {
@@ -82,7 +81,6 @@ function withPredictorLock(task) {
 async function closePredictorBrowser() {
     const browser = predictorBrowser;
     predictorBrowser = null;
-    predictorPage = null;
     if (browser) {
         try { await browser.close(); } catch (_) {}
     }
@@ -98,42 +96,43 @@ async function getRemoteSizePrediction() {
                     '--disable-dev-shm-usage', '--single-process'
                 ]
             });
-            predictorPage = await predictorBrowser.newPage();
-            await predictorPage.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
-            await predictorPage.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36');
-            await predictorPage.setRequestInterception(true);
-            predictorPage.on('request', request => {
+        }
+
+        // A fresh page prevents the Netlify app's own minute reload timer from
+        // colliding with the next bot cycle. The page is always closed in finally.
+        const page = await predictorBrowser.newPage();
+        try {
+            await page.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
+            await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36');
+            await page.setRequestInterception(true);
+            page.on('request', request => {
                 const type = request.resourceType();
                 if (type === 'image' || type === 'font' || type === 'media') request.abort().catch(() => {});
                 else request.continue().catch(() => {});
             });
-        }
 
-                await predictorPage.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}`, {
-            waitUntil: 'domcontentloaded', timeout: 20000
-        });
-
-        // The page fetches the live data asynchronously. Give it the requested
-        // five seconds after DOM load before reading the rendered prediction.
-        await new Promise(resolve => setTimeout(resolve, 5000));
-
-        const readPrediction = () => predictorPage.evaluate(() => ({
-            period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
-            size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
-            status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
-        }));
-        let prediction = await readPrediction();
-
-        // A slow cold start may still be rendering; allow one short retry without
-        // launching another browser or creating another page.
-        if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
+            await page.goto(`${REMOTE_PREDICTOR_URL}?t=${Date.now()}`, {
+                waitUntil: 'domcontentloaded', timeout: 20000
+            });
             await new Promise(resolve => setTimeout(resolve, 5000));
-            prediction = await readPrediction();
+
+            const readPrediction = () => page.evaluate(() => ({
+                period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
+                size: document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '',
+                status: document.getElementById('predictionStatus')?.textContent?.trim() || ''
+            }));
+            let prediction = await readPrediction();
+            if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                prediction = await readPrediction();
+            }
+            if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
+                throw new Error(`Netlify prediction not ready: ${prediction.status || 'no status'}`);
+            }
+            return prediction;
+        } finally {
+            await page.close().catch(() => {});
         }
-        if (!/^\d+$/.test(prediction.period) || !/^(BIG|SMALL)$/.test(prediction.size)) {
-            throw new Error(`Netlify prediction not ready after 5s: ${prediction.status || 'no status'}`);
-        }
-        return prediction;
     });
 }
 
