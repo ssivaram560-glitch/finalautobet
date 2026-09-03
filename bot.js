@@ -1537,108 +1537,68 @@ function formatPrediction(signal) {
 
 // ============================================================
 // ============================================================
-// MASTERMIND ULTRA v10 / PART2-DEEP / PART4-ENSEMBLE ENGINE
-// Ported from the newly attached Python logic.
-// ============================================================
-function mmNums(list, limit = 1000) {
-    return (Array.isArray(list) ? list : []).slice(0, limit).map(x => Number.parseInt(x?.number ?? x?.result_number ?? x?.num ?? x?.value ?? x?.result, 10)).filter(n => Number.isInteger(n) && n >= 0 && n <= 9);
-}
-function mmSize(n) { return n >= 5 ? 'B' : 'S'; }
-function mmSideNums(pred) { return pred === 'B' ? [5,6,7,8,9] : [0,1,2,3,4]; }
-function mmTopNumbers(nums, pred, count = 2) {
-    const freq = Object.fromEntries(mmSideNums(pred).map(n => [n, 0]));
-    nums.slice(0, 30).forEach(n => { if (Object.prototype.hasOwnProperty.call(freq, n)) freq[n]++; });
-    return mmSideNums(pred).sort((a,b) => freq[b] - freq[a]).slice(0, count);
+// Legacy Mastermind/mod prediction engines removed; HTML 5-result pattern is the only predictor.
+
+function htmlNumber(item) {
+    const raw = item?.number ?? item?.result ?? item?.resultNumber ?? item?.num ?? item?.value ?? item?.winNumber;
+    const n = Number.parseInt(String(raw ?? '').replace(/\D/g, '').slice(-1), 10);
+    return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null;
 }
 
-function masterAiV10(history, level = 1, state = {}) {
-    const nums = mmNums(history, 1000);
-    const fallback = level === 3
-        ? { prediction:'B', confidence:97, numbers:[7,8], primary:7, engine:'JACKPOT-CONFIRM v10' }
-        : { prediction:'S', confidence:level === 2 ? 93 : 88, numbers:[2,3], primary:2, engine:level === 2 ? 'RECOVERY v10' : 'MASTERMIND ULTRA v10' };
-    if (nums.length < 3) return fallback;
-    const freq = Array(10).fill(0);
-    nums.forEach((n, i) => { const w = Math.pow(0.85, nums.length - 1 - i); freq[n] += w * 2; if (n > 0) freq[n-1] += w*.4; if (n < 9) freq[n+1] += w*.4; });
-    const countSmall = a => a.filter(n => n <= 4).length;
-    const l3 = nums.slice(-3), l5 = nums.slice(-5), l7 = nums.slice(-7), l12 = nums.slice(-12);
-    const sm3=countSmall(l3), sm5=countSmall(l5), sm7=countSmall(l7), sm12=countSmall(l12);
-    let ss=sm3/3*.40+sm5/5*.28+sm7/7*.20+sm12/12*.12;
-    let bs=(3-sm3)/3*.40+(5-sm5)/5*.28+(7-sm7)/7*.20+(12-sm12)/12*.12;
-    let dir = mmSize(nums[nums.length-1]), streak=0;
-    for (let i=nums.length-1;i>=0 && mmSize(nums[i])===dir;i--) streak++;
-    if (streak >= 4) { if (dir==='S') bs += .38; else ss += .38; }
-    else if (streak >= 2) { if (dir==='S') ss += .15; else bs += .15; }
-    let alt=0; for(let i=nums.length-1;i>0 && mmSize(nums[i])!==mmSize(nums[i-1]);i--) alt++;
-    if (alt >= 3) { if (dir==='S') ss += .28; else bs += .28; }
-    if (sm5 >= 4) bs += .42; if (sm5 <= 1) ss += .42; if (sm3 === 3) bs += .22; if (sm3 === 0) ss += .22;
-    let pred;
-    if (level === 3) { pred = sm3 >= 2 ? 'B' : 'S'; const sf=freq.slice(0,5).reduce((a,b)=>a+b,0), bf=freq.slice(5).reduce((a,b)=>a+b,0); if (Math.abs(sf-bf)>.6) pred=bf>sf?'B':'S'; }
-    else if (level === 2 && state.consecutiveLoss >= 1 && state.lastPred) pred = state.lastPred === 'S' ? 'B' : 'S';
-    else pred = ss >= bs ? 'S' : 'B';
-    const target = mmSideNums(pred), sorted = target.slice().sort((a,b)=>freq[b]-freq[a]);
-    const numbers = [sorted[0], sorted[1]];
-    if (level === 3) numbers.push(sorted[2]);
-    const diff=Math.abs(ss-bs), base=level===3?96:(level===2?92:87), boost=state.streak>=5?2:(state.streak>=3?1:0);
-    return { prediction:pred, confidence:Math.min(99, Math.round(base+diff*6+boost)), numbers, primary:numbers[0], pattern:nums.slice(-9).map(mmSize).join(''), engine:level===3?'JACKPOT-CONFIRM v10':(level===2?'RECOVERY v10':'MASTERMIND ULTRA v10') };
+function htmlIssue(item, fallback) {
+    return String(item?.issueNumber ?? item?.issue ?? item?.period ?? item?.periodNumber ?? item?.id ?? fallback);
 }
 
-function part2DeepV3(results) {
-    const nums=mmNums(results,1000), fallback={prediction:'S',confidence:75,numbers:[2,3],primary:2,engine:'PART2-DEEP v3',pattern:''};
-    if(nums.length<20) return fallback;
-    const current=nums[0], l3=nums.slice(0,3), l5=nums.slice(0,5), l10=nums.slice(0,10), l20=nums.slice(0,20), l30=nums.slice(0,30);
-    let score=0, hits=[]; let p1b=0,p1s=0;
-    for(let i=1;i<nums.length;i++) if(nums[i]===current) nums[i-1]>4?p1b++:p1s++;
-    const p1t=p1b+p1s; if(p1t>=5){score+=(p1b-p1s)/p1t*3.5;hits.push('P1');} else if(p1t){score+=(p1b-p1s)/p1t*1.5;}
-    const b3=l3.filter(n=>n>4).length,b5=l5.filter(n=>n>4).length;
-    if(b3>=3){score-=2.2;hits.push('P2');} else if(b3===0){score+=2.2;hits.push('P2');} else if(b3>=2)score-=.8; else score+=.8;
-    if(b5>=4)score-=1.8; else if(b5===0)score+=1.8; else if(b5>=3)score-=.7; else if(b5<=1)score+=.7;
-    const zig=l10.slice(1).filter((n,i)=>(n>4)!==(l10[i]>4)).length; if(zig>=7)score += current>4?2:-2;
-    const b20=l20.filter(n=>n>4).length; if(b20>=13)score-=1; else if(b20<=7)score+=1;
-    if([8,9].includes(current))score+=.5; else if([6,7].includes(current))score+=.3; else if([0,1].includes(current))score-=.5; else if([2,3].includes(current))score-=.3;
-    const l100=nums.slice(0,100), rev=l100.slice(1).filter((n,i)=>(n>4)!==(l100[i]>4)).length/Math.max(l100.length-1,1), lastBig=nums[1]>4;
-    if(rev>.58)score+=lastBig?1.2:-1.2; else if(rev<.42)score+=lastBig?-.8:.8;
-    const c={}; nums.slice(1,6).forEach(n=>c[n]=(c[n]||0)+1); if((c[current]||0)>=2)score+=p1b>p1s?.9:-.9;
-    let st=0, sd=mmSize(nums[0]); for(const n of nums){if(mmSize(n)===sd)st++;else break;} if(sd==='B'&&st>=3)score+=Math.min(2.5,.8+st*.4); if(sd==='S'&&st>=3)score-=Math.min(2.5,.8+st*.4);
-    if(l10.length>=8 && zig>=8)score+=current>4?1.5:-1.5;
-    if(nums.length>=3 && mmSize(nums[1])===mmSize(nums[2]))score+=nums[1]>4?-1:1;
-    const w=l30.reduce((a,n,i)=>a+Math.pow(.97,i)*(n>4?1:-1),0); score+=w*.08;
-    if(current<=1)score-=1.1; else if(current>=8)score+=1.1;
-    const pred=score>0?'B':'S', conf=Math.min(97,Math.floor(70+Math.min(25,Math.abs(score)*4)+Math.min(5,hits.length*.4))), nums2=mmTopNumbers(nums,pred);
-    return {prediction:pred,confidence:conf,numbers:nums2,primary:nums2[0],engine:'PART2-DEEP v3',pattern:nums.slice(0,9).map(mmSize).join(''),patterns_triggered:hits.length};
+function htmlSortNewest(items) {
+    return items.slice().sort((a, b) => {
+        const ai = htmlIssue(a, 0), bi = htmlIssue(b, 0);
+        if (/^\d+$/.test(ai) && /^\d+$/.test(bi)) {
+            if (ai.length !== bi.length) return bi.length - ai.length;
+            return bi.localeCompare(ai);
+        }
+        return 0;
+    });
 }
 
-function part4EnsembleV1(results) {
-    const nums=mmNums(results,100), fallback={prediction:'S',confidence:70,numbers:[2,3],primary:2,engine:'PART4-ENSEMBLE v1',pattern:''};
-    if(nums.length<10)return fallback;
-    const sizes=nums.map(mmSize), big=nums.slice(0,20).filter(n=>n>=5).length, bp=big/Math.max(nums.slice(0,20).length,1)*100;
-    const simple=bp>=60?'S':(bp<=40?'B':(big>=10?'B':'S'));
-    const streak=sizes[0]===sizes[1]&&sizes[1]===sizes[2]? (sizes[0]==='B'?'S':'B') : null;
-    const alt=sizes[0]!==sizes[1]&&sizes[1]!==sizes[2]&&sizes[2]!==sizes[3] ? (sizes[0]==='B'?'S':'B') : null;
-    const votes={B:0,S:0}; votes[simple]+=Math.max(bp,100-bp)*.6; if(streak)votes[streak]+=78*1.2; if(alt)votes[alt]+=72*1.2; votes[bp>=50?'B':'S']+=50;
-    const pred=votes.B>=votes.S?'B':'S', confidence=Math.max(65,Math.min(95,Math.floor(Math.min(95,Math.max(votes.B,votes.S)*.9))));
-    const ns=mmTopNumbers(nums,pred); return {prediction:pred,confidence,numbers:ns,primary:ns[0],engine:'PART4-ENSEMBLE v1',pattern:nums.slice(0,9).map(mmSize).join(''),big_pct:bp,small_pct:100-bp};
-}
-
-function mastermindHistory(list) { return Array.isArray(list) ? list : []; }
+// Exact equivalent of the supplied HTML logic. It deliberately returns only
+// one SIZE signal (BIG/SMALL); no number or mod/AI prediction is used.
 async function decidePrediction(list, currentPeriod, userId) {
     initState(userId);
-    const history = mastermindHistory(list);
-    const st = autobetState[userId] || { level: 1, consecutiveLoss: 0 };
-    const level = Math.max(1, Math.min(3, Number(st.level) || 1));
-    const state = { consecutiveLoss: Number(st.consecutiveLoss) || 0, lastPred: userStates[userId].lastPrediction === 'BIG' ? 'B' : 'S', streak: Number(st.consecutiveLoss) || 0 };
-    const candidates = [
-        masterAiV10(history, level, state),
-        part2DeepV3(history),
-        part4EnsembleV1(history)
-    ];
-    const chosen = candidates.reduce((a,b) => Number(b.confidence || 0) > Number(a.confidence || 0) ? b : a);
-    const side = chosen.prediction === 'B' ? 'BIG' : 'SMALL';
-    const number = Number(chosen.primary ?? chosen.numbers?.[0]);
-    if (!Number.isInteger(number) || number < 0 || number > 9) return { skip:true, reason:'Mastermind returned invalid number' };
+    const results = htmlSortNewest(Array.isArray(list) ? list : [])
+        .map((item, index) => ({ number: htmlNumber(item), issue: htmlIssue(item, index) }))
+        .filter(item => item.number !== null);
+    if (results.length < 5) return { skip: true, reason: 'Need at least 5 valid results' };
+
+    const getSide = n => Number(n) >= 5 ? 'BIG' : 'SMALL';
+    const pattern = `${results[0].number}|${results[1].number}|${results[2].number}|${getSide(results[3].number)}|${getSide(results[4].number)}`;
+    let big = 0, small = 0;
+
+    for (let i = 1; i <= results.length - 5; i++) {
+        const p = `${results[i].number}|${results[i + 1].number}|${results[i + 2].number}|${getSide(results[i + 3].number)}|${getSide(results[i + 4].number)}`;
+        if (p !== pattern) continue;
+        const next = results[i - 1];
+        if (getSide(next.number) === 'BIG') big++;
+        else small++;
+    }
+
+    const total = big + small;
+    const bigPct = total ? big / total * 100 : 0;
+    const smallPct = total ? small / total * 100 : 0;
+    const confidence = Math.max(bigPct, smallPct);
+    if (!total || confidence < 60 || bigPct === smallPct) {
+        return { skip: true, reason: `Pattern confidence ${confidence.toFixed(1)}% is below 60% or tied`, pattern, matches: total };
+    }
+
+    const side = bigPct > smallPct ? 'BIG' : 'SMALL';
     userStates[userId].lastPrediction = side;
-    userStates[userId].lastNumber = number;
-    userStates[userId].lastReason = `${chosen.engine}; confidence=${chosen.confidence}; candidates=${candidates.map(x=>x.engine+':'+x.confidence).join(',')}`;
-    return { type:'COMBINED', val:side, number, pat:chosen.engine, confidence:chosen.confidence, bets:[{type:'SIZE',val:side,kind:'size'},{type:'NUMBER',val:number,kind:'number'}] };
+    userStates[userId].lastReason = `HTML 5-result pattern; matches=${total}; BIG=${bigPct.toFixed(1)}%; SMALL=${smallPct.toFixed(1)}%`;
+    return {
+        type: 'SIZE',
+        val: side,
+        pat: 'HTML 5-RESULT PATTERN',
+        confidence: Math.round(confidence * 10) / 10,
+        bets: [{ type: 'SIZE', val: side, kind: 'size' }]
+    };
 }
 
 function updateAfterResult(userId, wasWin, actual, betPlaced) {
@@ -1860,9 +1820,8 @@ async function runPredict(userId, chatId) {
 "║    👑 EARN WITH ME AI    ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
-"║ Mode    : BIG/SMALL + NUMBER\n"+
+"║ Mode    : BIG/SMALL\n"+
 "║ Size    : "+signal.val+"\n"+
-"║ Number  : "+(signal.number ?? signal.bets?.find(b=>b.type==="NUMBER")?.val ?? signal.bets?.find(b=>b.type==="SIZE")?.number ?? "-")+"\n"+
 "║ Result  : "+formatPrediction(signal)+"\n"+
 "║ Source  : Live Jade site\n"+
 "╠══════════════════════════╣\n"+
