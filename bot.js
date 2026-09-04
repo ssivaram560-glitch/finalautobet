@@ -925,8 +925,12 @@ function pythonStrongestPredict(list, userId) {
     const p1=pythonPart1(nums,level,userId), p2=pythonPart2(list), p4=pythonPart4(list);
     const candidates=[{name:"PART1",raw:p1},{name:"PART2",raw:p2},{name:"PART4",raw:p4}];
     const chosen=candidates.reduce((a,b)=>Number(b.raw.confidence||0)>Number(a.raw.confidence||0)?b:a);
-    const raw=chosen.raw; const displayed=chosen.name==="PART1"?pyOpp(raw.prediction):raw.prediction;
-    return { type:"SIZE", val:displayed==="B"?"BIG":"SMALL", mode:chosen.name+"_PYTHON", engine:chosen.name, confidence:Number(raw.confidence)||0, numbers:raw.numbers||[], calculation:"Python strongest engine: PART1/PART2/PART4 highest confidence", pattern:raw.pattern||"", matches:raw.patterns_triggered||0, bigPct:0, smallPct:0, rawPrediction:raw.prediction };
+    const raw=chosen.raw;
+    // Requested behavior: analysis BIG => final prediction SMALL;
+    // analysis SMALL => final prediction BIG.
+    const displayed=pyOpp(raw.prediction);
+    const numbers=pyTopNumbers(nums, displayed);
+    return { type:"SIZE", val:displayed==="B"?"BIG":"SMALL", mode:chosen.name+"_PYTHON_OPPOSITE", engine:chosen.name, confidence:Number(raw.confidence)||0, numbers, calculation:"Python strongest analysis inverted: BIG→SMALL, SMALL→BIG", pattern:raw.pattern||"", matches:raw.patterns_triggered||0, bigPct:0, smallPct:0, rawPrediction:raw.prediction };
 }
 
 //  PREDICT LOOP
