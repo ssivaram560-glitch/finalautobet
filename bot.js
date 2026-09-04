@@ -65,130 +65,6 @@ let userStates = {};
 const predictionTimers = new Map();
 const resultIntervals = new Map();
 
-// The Netlify app computes the prediction in the browser. Keep one browser/page
-// for the whole process and serialize reads so Render free-plan memory stays bounded.
-const REMOTE_PREDICTOR_URL = process.env.REMOTE_PREDICTOR_URL ||
-    "https://tranquil-gingersnap-48aa12.netlify.app/";
-let predictorBrowser = null;
-let predictorPage = null;
-let predictorReadLock = Promise.resolve();
-const predictorFailureNotified = new Set();
-
-function withPredictorLock(task) {
-    const next = predictorReadLock.then(task, task);
-    predictorReadLock = next.catch(() => {});
-    return next;
-}
-
-async function closePredictorBrowser() {
-    if (predictorPage) await predictorPage.close().catch(() => {});
-    if (predictorBrowser) await predictorBrowser.close().catch(() => {});
-    predictorPage = null;
-    predictorBrowser = null;
-}
-
-async function getPredictorPage() {
-    if (predictorBrowser && predictorPage && !predictorPage.isClosed()) {
-        return predictorPage;
-    }
-
-    predictorBrowser = await puppeteer.launch({
-        headless: true,
-        timeout: 30000,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu'
-        ]
-    });
-
-    predictorPage = await predictorBrowser.newPage();
-    await predictorPage.setRequestInterception(true);
-    predictorPage.on('request', request => {
-        const requestUrl = request.url();
-        if (requestUrl.startsWith('https://luciferapi.com/?')) {
-            request.continue({ url: 'https://luciferapi.com/' }).catch(() => {});
-        } else {
-            request.continue().catch(() => {});
-        }
-    });
-    predictorPage.on('console', msg => {
-        console.log('[PREDICTOR PAGE]', msg.type(), msg.text());
-    });
-    predictorPage.on('pageerror', error => {
-        console.error('[PREDICTOR PAGE ERROR]', error.message);
-    });
-    predictorPage.on('requestfailed', request => {
-        console.error('[PREDICTOR REQUEST FAILED]', request.url(), request.failure()?.errorText);
-    });
-    await predictorPage.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
-    await predictorPage.setUserAgent(
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36'
-    );
-    return predictorPage;
-}
-
-async function readRemotePredictionOnce() {
-    const page = await getPredictorPage();
-    const separator = REMOTE_PREDICTOR_URL.includes('?') ? '&' : '?';
-    const url = `${REMOTE_PREDICTOR_URL}${separator}t=${Date.now()}`;
-
-    await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000
-    });
-
-    try {
-        await page.waitForFunction(() => {
-            const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
-            const size = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
-            const status = document.getElementById('predictionStatus')?.textContent?.trim() || '';
-            const isSkip = /SKIP|NO MATCHING PATTERN/i.test(status) || size === 'SKIP';
-            return /^\d+$/.test(period) && (/^(BIG|SMALL)$/.test(size) || isSkip);
-        }, { timeout: 60000, polling: 1000 });
-    } catch (waitError) {
-        const debug = await page.evaluate(() => ({
-            period: document.getElementById('nextPeriodNumber')?.textContent?.trim() || '',
-            size: document.getElementById('predictedSize')?.textContent?.trim() || '',
-            status: document.getElementById('predictionStatus')?.textContent?.trim() || '',
-            title: document.title
-        })).catch(() => ({}));
-        throw new Error(
-            `Predictor DOM timeout: ${waitError.message}; ` +
-            `period=${debug.period}; size=${debug.size}; status=${debug.status}`
-        );
-    }
-
-    return page.evaluate(() => {
-        const period = document.getElementById('nextPeriodNumber')?.textContent?.trim() || '';
-        const rawSize = document.getElementById('predictedSize')?.textContent?.trim()?.toUpperCase() || '';
-        const status = document.getElementById('predictionStatus')?.textContent?.trim() || '';
-        const isSkip = /SKIP|NO MATCHING PATTERN/i.test(status) || rawSize === 'SKIP';
-        return { period, size: isSkip ? 'SKIP' : rawSize, status };
-    });
-}
-
-async function getRemoteSizePrediction() {
-    return withPredictorLock(async () => {
-        let lastError;
-        for (let attempt = 1; attempt <= 2; attempt++) {
-            try {
-                return await readRemotePredictionOnce();
-            } catch (error) {
-                lastError = error;
-                console.error(`[REMOTE PREDICTOR] attempt ${attempt}/2:`, error?.stack || error?.message || error);
-                await closePredictorBrowser();
-                if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-        }
-        throw lastError || new Error('Remote predictor failed');
-    });
-}
-
-process.once('SIGTERM', () => { closePredictorBrowser().finally(() => process.exit(0)); });
-process.once('SIGINT', () => { closePredictorBrowser().finally(() => process.exit(0)); });
-
 function schedulePrediction(userId, chatId, delayMs) {
     const key = String(userId);
     const old = predictionTimers.get(key);
@@ -941,85 +817,218 @@ async function handleLoss(userId, chatId, actual, num, betLevel) {
     await sendSticker(chatId, LOSS_STICKER);
 }
 
-//  REMOTE SIZE-ONLY PREDICTION
 // ============================================================
-// No local prediction algorithm is maintained here. The Netlify page is the
-// single source of truth; this bot reads only its next period and BIG/SMALL UI.
+// PYTHON BOT PREDICTION PORT
+// The live answer is selected exactly like the Python bot:
+// PART1 (master style), PART2 (deep pattern), PART4 (ensemble),
+// then the highest-confidence candidate is displayed.
+// ============================================================
+function pyNum(row) {
+    const raw = typeof row === "object" ? (row.number ?? row.result ?? row.resultNumber ?? row.num ?? row.value ?? row.openNumber ?? row.winNumber) : row;
+    const n = Number.parseInt(String(raw ?? "").replace(/\D/g, ""), 10);
+    return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null;
+}
+function pyNums(list, limit = 1000) {
+    return (Array.isArray(list) ? list.slice(0, limit) : []).map(pyNum).filter(n => n !== null);
+}
+function pySide(n) { return Number(n) >= 5 ? "B" : "S"; }
+function pyOpp(s) { return s === "B" ? "S" : "B"; }
+function pyTopNumbers(nums, side, count = 2) {
+    const wanted = side === "B" ? [5,6,7,8,9] : [0,1,2,3,4];
+    const freq = Object.fromEntries(wanted.map(n => [n, 0]));
+    nums.forEach(n => { if (n in freq) freq[n]++; });
+    return wanted.slice().sort((a,b) => freq[b] - freq[a] || a - b).slice(0, count);
+}
+
+// Python PART1 / master-style signal.  The Python engine uses the latest
+// nine values plus level/recovery state; this is its BIG/SMALL vote port.
+function pythonPart1(nums, level = 1, userId = null) {
+    if (nums.length < 9) return { prediction: "S", confidence: 75, numbers: [2,3], engine: "PART1-FALLBACK" };
+    const a = nums.slice(0, 9), size = a.map(pySide);
+    let big = 0, small = 0;
+    const add = (v, w) => v === "B" ? big += w : small += w;
+    const recent5 = size.slice(0,5), recent3 = size.slice(0,3);
+    add(size[0] === size[1] ? pyOpp(size[0]) : size[0], 0.35);
+    add(recent5.filter(x=>x === "B").length >= 3 ? "S" : "B", 0.25);
+    add(recent3.filter(x=>x === "B").length >= 2 ? "S" : "B", 0.22);
+    let alternation = 0;
+    for (let i=1;i<size.length;i++) { if (size[i] !== size[i-1]) alternation++; else break; }
+    if (alternation >= 3) add(size[0] === "B" ? "S" : "B", 0.28);
+    const sm5 = recent5.filter(x=>x === "S").length;
+    if (sm5 >= 4) add("B", 0.42); if (sm5 <= 1) add("S", 0.42);
+    const sm3 = recent3.filter(x=>x === "S").length;
+    if (sm3 === 3) add("B", 0.22); if (sm3 === 0) add("S", 0.22);
+    const pred = big > small ? "B" : "S";
+    const diff = Math.abs(big-small);
+    const confidence = Math.min(99, Math.round((level === 3 ? 96 : level === 2 ? 92 : 87) + diff*6));
+    return { prediction: pred, confidence, numbers: pyTopNumbers(a, pred), primary: pyTopNumbers(a,pred)[0], engine: "PART1-MASTERMIND", pattern: size.join("") };
+}
+
+// Python PART2 — the 20-pattern score board (newest result first).
+function pythonPart2(results) {
+    const nums = pyNums(results);
+    const fallback = { prediction:"S", confidence:75, numbers:[2,3], primary:2, engine:"PART2-DEEP v3" };
+    if (nums.length < 20) return fallback;
+    const cur = nums[0]; let score = 0; let hits = 0;
+    const hit = (v,w) => { score += v*w; hits++; };
+    let pb=0, ps=0;
+    for (let i=1;i<nums.length;i++) if (nums[i]===cur) (nums[i-1]>=5 ? pb++ : ps++);
+    const total=pb+ps;
+    if (total>=5) score += ((pb-ps)/total)*3.5; else if(total) score += ((pb-ps)/total)*1.5;
+    if (total) hits++;
+    const l3=nums.slice(0,3).filter(n=>n>=5).length;
+    if(l3===3) hit(-1,2.2); else if(l3===0) hit(1,2.2); else if(l3>=2) hit(-1,.8); else hit(1,.8);
+    const l5=nums.slice(0,5).filter(n=>n>=5).length;
+    if(l5>=4) hit(-1,1.8); else if(l5===0) hit(1,1.8); else if(l5>=3) hit(-1,.7); else if(l5<=1) hit(1,.7);
+    const l10=nums.slice(0,10); const zz=l10.slice(1).filter((n,i)=>pySide(n)!==pySide(l10[i])).length;
+    if(zz>=7) hit(cur>=5?1:-1,2);
+    const l500=nums.slice(0,500), b500=l500.filter(n=>n>=5).length, s500=l500.length-b500;
+    if(b500>s500*1.08) hit(-1,.6); else if(s500>b500*1.08) hit(1,.6);
+    const b20=nums.slice(0,20).filter(n=>n>=5).length;
+    if(b20>=13) hit(-1,1); else if(b20<=7) hit(1,1);
+    if([8,9].includes(cur)) hit(1,.5); else if([6,7].includes(cur)) hit(1,.3); else if([0,1].includes(cur)) hit(-1,.5); else if([2,3].includes(cur)) hit(-1,.3);
+    const l100=nums.slice(0,100); const rev=l100.slice(1).filter((n,i)=>pySide(n)!==pySide(l100[i])).length; const rr=rev/Math.max(l100.length-1,1);
+    if(rr>.58) hit(pySide(nums[1])==="B"?1:-1,1.2); else if(rr<.42) hit(pySide(nums[1])==="B"?-1:1,.8);
+    const c5={}; nums.slice(1,6).forEach(n=>c5[n]=(c5[n]||0)+1); if((c5[cur]||0)>=2) hit(pb>ps?1:-1,.9);
+    let streak=1, sd=pySide(nums[0]); while(streak<15 && pySide(nums[streak])===sd) streak++;
+    if(streak>=3) hit(sd==="B"?1:-1,Math.min(2.5,.8+streak*.4));
+    const alt8=l10.slice(1).filter((n,i)=>pySide(n)!==pySide(l10[i])).length; if(alt8>=8) hit(cur>=5?1:-1,1.5);
+    if(pySide(nums[1])===pySide(nums[2])) hit(pySide(nums[1])==="B"?1:-1,1);
+    const c5b=nums.filter((n,i)=>i<50&&i%5===0&&n>=5).length, c5s=nums.filter((n,i)=>i<50&&i%5===0&&n<5).length;
+    if(c5b+c5s) score += ((c5b-c5s)/(c5b+c5s))*.5;
+    const drift=nums.slice(0,250).filter(n=>n>=5).length-nums.slice(250,500).filter(n=>n>=5).length;
+    if(drift>15) hit(-1,.8); else if(drift<-15) hit(1,.8);
+    let eb=0, os=0; for(let i=1;i<Math.min(200,nums.length);i++) if(nums[i]===cur){const n=nums[i-1]; if(n%2===0&&n>=5)eb++; else if(n%2===1&&n<5)os++;}
+    if(eb>os+3) hit(1,.4); else if(os>eb+3) hit(-1,.4);
+    const weighted=nums.slice(0,30).reduce((v,n,i)=>v+Math.pow(.97,i)*(n>=5?1:-1),0); score+=weighted*.08;
+    const pred=score>0?"B":"S"; const conf=Math.min(97,Math.max(70,Math.round(70+Math.abs(score)*4+Math.min(5,hits*.4))));
+    const numbers=pyTopNumbers(nums,pred); return { prediction:pred, confidence:conf, numbers, primary:numbers[0], engine:"PART2-DEEP v3", pattern:nums.slice(0,9).map(pySide).join(""), big_count:pb, small_count:ps, patterns_triggered:hits };
+}
+
+// Python PART4 — weighted frequency + reversal + alternation + simple vote.
+function pythonPart4(results) {
+    const nums=pyNums(results,100); const fallback={prediction:"S",confidence:70,numbers:[2,3],primary:2,engine:"PART4-ENSEMBLE v1"};
+    if(nums.length<10) return fallback;
+    const sizes=nums.slice(0,30).map(pySide), scores={B:0,S:0};
+    const totalW=sizes.length*(sizes.length+1)/2;
+    sizes.slice().reverse().forEach((v,i)=>scores[v]+=(i+1)/totalW*100);
+    let st=1; while(st<sizes.length&&sizes[st]===sizes[0])st++; if(st>=3)scores[pyOpp(sizes[0])]+=20;
+    const alts=sizes.slice(1).filter((v,i)=>v!==sizes[i]).length; if(alts>=sizes.length*.7)scores[pyOpp(sizes[0])]+=15;
+    const freq={}; nums.slice(0,30).forEach(n=>freq[n]=(freq[n]||0)+1); const hot=Object.keys(freq).sort((a,b)=>freq[b]-freq[a]).slice(0,4).map(Number); const hb=hot.filter(n=>n>=5).length; if(hb>=3)scores.B+=12; else if(hb<=1)scores.S+=12;
+    const simple=nums.slice(0,20).filter(n=>n>=5).length > nums.slice(0,20).filter(n=>n<5).length ? "S":"B";
+    const pred=(scores.B+(simple==="B"?0:0)) >= scores.S ? "B":"S"; const confidence=Math.max(65,Math.min(95,Math.round(Math.max(scores.B,scores.S)*.9)));
+    const numbers=pyTopNumbers(nums,pred); return {prediction:pred,confidence,numbers,primary:numbers[0],engine:"PART4-ENSEMBLE v1",pattern:sizes.slice(0,9).join("")};
+}
+
+function pythonStrongestPredict(list, userId) {
+    const nums=pyNums(list); const level=Math.max(1,Math.min(3,Number(autobetState[userId]?.level)||1));
+    const p1=pythonPart1(nums,level,userId), p2=pythonPart2(list), p4=pythonPart4(list);
+    const candidates=[{name:"PART1",raw:p1},{name:"PART2",raw:p2},{name:"PART4",raw:p4}];
+    const chosen=candidates.reduce((a,b)=>Number(b.raw.confidence||0)>Number(a.raw.confidence||0)?b:a);
+    const raw=chosen.raw; const displayed=chosen.name==="PART1"?pyOpp(raw.prediction):raw.prediction;
+    return { type:"SIZE", val:displayed==="B"?"BIG":"SMALL", mode:chosen.name+"_PYTHON", engine:chosen.name, confidence:Number(raw.confidence)||0, numbers:raw.numbers||[], calculation:"Python strongest engine: PART1/PART2/PART4 highest confidence", pattern:raw.pattern||"", matches:raw.patterns_triggered||0, bigPct:0, smallPct:0, rawPrediction:raw.prediction };
+}
+
+//  PREDICT LOOP
+// ============================================================
+function parseItem(item) {
+    const n = +(item.number || item.winNumber || 0);
+    return {
+        n,
+        size: n >= 5 ? "BIG" : "SMALL",
+        color:
+            n === 0 ? "RED" :
+            n === 5 ? "GREEN" :
+            n % 2 === 0 ? "RED" : "GREEN"
+    };
+}
+function stk(arr, key) {
+    let count = 1;
+    let val = arr[0]?.[key];
+    for (let i = 1; i < arr.length; i++) {
+        if (arr[i][key] === val) count++;
+        else break;
+    }
+    return { val, count };
+}
 async function runPredict(userId, chatId) {
-    if (!running[userId]) return;
+    if(!running[userId]) return;
     initUser(userId);
     const state = userStates[userId];
     const st = autobetState[userId];
     const cfg = autobetCfg[userId];
 
-    let remote;
-    try {
-        remote = await getRemoteSizePrediction();
-    } catch (error) {
-        console.error('[REMOTE PREDICTOR]', error?.stack || error?.message || error);
-        const key = String(userId);
-        if (!predictorFailureNotified.has(key)) {
-            predictorFailureNotified.add(key);
-            await send(chatId, '⏳ Live predictor unavailable. Retrying shortly...');
+    // Profit Target Check
+    if (st.isWaiting) {
+        if (Date.now() >= st.nextStartTime) {
+            st.isWaiting = false;
+            profitTrack[userId].pnl = 0; 
+            await send(chatId, "🔄 Timed Restart! Starting new section...");
+        } else {
+            return schedulePrediction(userId, chatId, 60000);
         }
-        return schedulePrediction(userId, chatId, 30000);
     }
 
-    predictorFailureNotified.delete(String(userId));
-    const next = remote.period;
-    if (sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
+    const list = await fetchList();
+    if(!list) return schedulePrediction(userId, chatId, 15000);
+
+    const next = nextIssueNumber(list);
+    if (!next || BigInt(next) <= BigInt(list[0].issueNumber)) return schedulePrediction(userId, chatId, 5000);
+    if(sentPeriods[userId].has(next)) return schedulePrediction(userId, chatId, 2000);
     sentPeriods[userId].add(next);
-    if (sentPeriods[userId].size > 100) {
-        const oldest = sentPeriods[userId].values().next().value;
-        if (oldest) sentPeriods[userId].delete(oldest);
-    }
 
-    if (remote.size === 'SKIP') {
-        await send(chatId, '⏭️ SKIP: No safe pattern for period ' + next.slice(-6) + '\nChecking the next period...');
-        return schedulePrediction(userId, chatId, 8000);
+    // Live decision uses only the HTML 5-result BIG/SMALL pattern logic.
+    const signal = pythonStrongestPredict(list, userId);
+    if (!signal) {
+        await send(chatId, "⏭️ SKIP — No matching BIG/SMALL pattern with 60% confidence.");
+        return schedulePrediction(userId, chatId, 5000);
     }
-
-    if (sentPeriods[userId].size > 100) {
-        const oldest = sentPeriods[userId].values().next().value;
-        if (oldest) sentPeriods[userId].delete(oldest);
-    }
-
+    signal.calculationMode = signal.mode;
+    signal.calculationConfidence = signal.confidence;
+    signal.predictionDetails = { liveDecision: signal.engine + "-python-port", calculation: signal.calculation };
+    console.log(`[PYTHON STRONGEST LIVE] ${signal.engine} ${signal.val} confidence=${signal.confidence}% numbers=${(signal.numbers||[]).join(",")}`);
     state.currentMode = null;
-    state.lastPrediction = remote.size;
+    state.lastPrediction = signal.val;
+    // Snapshot the level used for this prediction before any result update.
+    // The martingale state is the single source of truth for the level.
+    // Never reset the displayed/bet level based on NORMAL or RECOVERY mode.
     const maxLevel = Math.max(1, Math.min(10, Number(cfg.maxLvl) || 1));
     const predictionLevel = Math.max(1, Math.min(maxLevel, Number(st.level) || 1));
-    const canBet = cfg.enabled === true;
-    const curBet = Number(cfg.customBets[predictionLevel - 1] ||
-        (cfg.baseBet * MULT[predictionLevel - 1]) || 0);
-    const abLine = (canBet ? '💰 BET ' : '👀 WATCH ') +
-        'L' + predictionLevel + ': ₹' + curBet;
 
-    // User-facing output intentionally contains size only; remote status is not exposed.
+    // Only the explicit AutoBet toggle controls whether a bet is sent.
+    // `running[userId]` remains the master emergency stop.
+    const canBet = cfg.enabled === true;
+    const effectiveLevel = predictionLevel;
+    const curBet = Number(cfg.customBets[effectiveLevel - 1] || (cfg.baseBet * MULT[effectiveLevel - 1]) || 0);
+    const abLine = (canBet ? "💰 BET " : "👀 WATCH ") + "L" + effectiveLevel + ": ₹" + curBet;
+
+    // User-facing prediction box: expose only the period, signal and active level.
+    // All calculation/model details remain server-side in logs and internal state.
     await send(chatId,
-        '╔══════════════════════════╗\n' +
-        '║   👑 EARN WITH ME AI    ║\n' +
-        '╠══════════════════════════╣\n' +
-        '║ Period  : ' + next.slice(-6) + '\n' +
-        '║ Size    : ' + (remote.size === 'BIG' ? '🔵 BIG' : '🟠 SMALL') + '\n' +
-        '║ Level   : L' + predictionLevel + '\n' +
-        '╠══════════════════════════╣\n' +
-        '║ ' + abLine + '\n' +
-        '╚══════════════════════════╝',
-        { reply_markup: { inline_keyboard: [[{ text: '💰 CHECK NOW', url: REG_LINK }]] } }
+"╔══════════════════════════╗\n"+
+"║   👑 EARN WITH ME AI    ║\n"+
+"╠══════════════════════════╣\n"+
+"║ Period  : "+next.slice(-6)+"\n"+
+"║ Signal  : "+(signal.val==="BIG"?"🔵 BIG":"🟠 SMALL")+"\n"+
+"║ Level   : L"+effectiveLevel+"\n"+
+"╠══════════════════════════╣\n"+
+"║ "+abLine+"\n"+
+"╚══════════════════════════╝",
+        {reply_markup:{inline_keyboard:[[{text:"💰 CHECK NOW",url:REG_LINK}]]}}
     );
 
     let betPlaced = false;
-    if (canBet) {
-        const result = await placeBet(userId, chatId, next, remote.size, 'SIZE', predictionLevel);
-        if (result?.ok) {
+    if (canBet) { 
+        const result = await placeBet(userId, chatId, next, signal.val, signal.type, effectiveLevel);
+        if (result && result.ok) {
             betPlaced = true;
-            await send(chatId, '✅ Bet placed successfully | L' + predictionLevel + '\n⏳ Checking result...');
-        } else if (result) {
-            await send(chatId, '❌ Bet Failed: ' + (result.msg || 'Unknown error'));
+            await send(chatId, "✅ Bet placed successfully | L" + effectiveLevel + "\n⏳ Checking result...");
+        } else if (result && !result.ok) {
+            await send(chatId, "❌ Bet Failed: " + (result.msg || "Unknown error"));
         }
     }
 
-    checkResult(userId, chatId, next, remote.size, 'SIZE', betPlaced, null, predictionLevel);
+    checkResult(userId, chatId, next, signal.val, signal.type, betPlaced, signal.mode, effectiveLevel);
 }
 // ============================================================
 //  RESULT CHECKER
@@ -1261,11 +1270,6 @@ function startBot(){
     bot=new TelegramBot(BOT_TOKEN,{polling:{interval:1000,autoStart:true,params:{timeout:30}}});
     bot.on("polling_error",err=>{
         const msg = err?.message || String(err);
-        if (msg.includes("409 Conflict") || msg.includes("terminated by other getUpdates request")) {
-            console.error("[POLL] 409 Conflict: another bot instance is using this token. Stop duplicate services/processes; polling will not be restarted automatically.");
-            try { bot.stopPolling(); } catch (e) {}
-            return;
-        }
         if (msg.includes("ECONNRESET") || msg.includes("EFATAL") || msg.includes("socket hang up")) {
             recoverPolling(err);
             return;
