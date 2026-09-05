@@ -1541,16 +1541,16 @@ function numberPrediction(lastResult) {
     const n = Number.parseInt(String(lastResult ?? '').trim(), 10);
     if (Number.isNaN(n) || n < 0 || n > 9) return null;
     const mapping = {
-        9: ['BIG', 4],
+   9: ['BIG', 4],
         8: ['SMALL', 6],
         7: ['SMALL', 7],
         6: ['SMALL', 8],
         5: ['BIG', 3],
         4: ['SMALL', 6],
         3: ['SMALL', 9],
-        2: ['SMALL', 5],
-        1: ['BIG', 0],
-        0: ['BIG', 1]
+        2: ['BIG', 0],
+        1: ['SMALL', 5],
+        0: ['BIG', 2]
     };
     const [size, number] = mapping[n];
     return { size, number };
