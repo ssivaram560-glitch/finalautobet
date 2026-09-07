@@ -1574,7 +1574,12 @@ function historySizePrediction(list) {
         .map(latestResultNumber)
         .filter(n => n !== null);
     const latestThree = history.slice(0, 3);
-    if (latestThree.length < 3) return null;
+    if (latestThree.length < 3) {
+        return {
+            skip: true,
+            reason: `Only ${latestThree.length} valid number(s) found; need 3`
+        };
+    }
 
     const sizes = latestThree.map(n => n >= 5 ? "BIG" : "SMALL");
     if (sizes.every(size => size === "BIG") || sizes.every(size => size === "SMALL")) {
@@ -1823,9 +1828,10 @@ async function runPredict(userId, chatId) {
     const signal = await decidePrediction(list, next, userId);
     if(!signal) { scheduleRun(userId, chatId, 5000); runInFlight.delete(runKey); return; }
     if (signal.skip) {
-        // This should only happen when the API returned no usable numbers.
+        // Show the actual reason: insufficient valid numbers, or a three-result
+        // same-size streak that the B/S filter intentionally skips.
         console.warn("[PREDICTION] Local engine skipped:", signal.reason);
-        await send(chatId, "SKIP — history unavailable");
+        await send(chatId, "SKIP — " + (signal.reason || "prediction unavailable"));
         scheduleRun(userId, chatId, 10000);
         runInFlight.delete(runKey);
         return;
