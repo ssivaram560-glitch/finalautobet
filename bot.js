@@ -1606,11 +1606,11 @@ async function decidePrediction(list, currentPeriod, userId) {
     initState(userId);
     const latest = Array.isArray(list) ? list.map(latestResultNumber).find(n => n !== null) : null;
     const cfg = autobetCfg[userId] || {};
-    // Keep the existing exact-number mode mapping untouched. The new
-    // latest-three rule applies only to B/S and combined modes.
-    const prediction = cfg.mode === "NUMBER"
-        ? numberPrediction(latest)
-        : historySizePrediction(list);
+    // Keep SIZE and NUMBER modes on the existing mapping. The new
+    // latest-three rule applies only to COMBINED (BigSmall+Number) mode.
+    const prediction = cfg.mode === "COMBINED"
+        ? historySizePrediction(list)
+        : numberPrediction(latest);
     if (prediction?.skip) {
         console.log(`[B/S SKIP] ${prediction.reason}`);
         return { skip: true, reason: prediction.reason };
