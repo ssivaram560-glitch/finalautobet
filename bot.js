@@ -650,7 +650,9 @@ const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YV
 const BET_URL     = "https://api.ar-lottery01.com/api/Lottery/WinGoBet";
 const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
-const API_URL     = "https://luciferapi.com/30sec.php";
+// One-minute result source used by dancing-cascaron-b6b408.netlify.app.
+// Response shape: { data: [{ issueNumber, number, ... }, ... ] }.
+const API_URL     = "https://luciferapi.com/index.php";
 const DRAW_URL    = API_URL;
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
