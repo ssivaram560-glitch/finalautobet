@@ -372,7 +372,7 @@ async function solveCaptcha(page) {
 }
 
 // ============================================================
-//  COMPLETE LOGIN WITH DIRECT URL NAVIGATION TO WINGO 1M
+//  COMPLETE LOGIN WITH DIRECT URL NAVIGATION TO WINGO 30S
 // ============================================================
 
 async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
@@ -567,10 +567,10 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
         } catch (e) {}
         await sleep(3000);
         
-        console.log('[LOGIN] Navigating to WinGo 1M page to trigger GetBalance request...');
-        console.log('[LOGIN] Navigating directly to WinGo 1M page via URL...');
+        console.log('[LOGIN] Navigating to WinGo 30S page to trigger GetBalance request...');
+        console.log('[LOGIN] Navigating directly to WinGo 30S page via URL...');
         try {
-            await page.goto(SITE_URL + '/WinGo/WinGo_1M', {
+            await page.goto(SITE_URL + '/WinGo/WinGo_30S', {
                 waitUntil: 'domcontentloaded',
                 timeout: 30000
             });
@@ -650,8 +650,8 @@ const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YV
 const BET_URL     = "https://api.ar-lottery01.com/api/Lottery/WinGoBet";
 const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
-const API_URL     = "https://luciferapi.com/1min.php";
-const DRAW_URL    = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json;";
+const API_URL     = "https://luciferapi.com/30sec.php";
+const DRAW_URL    = API_URL;
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
 const CHROME_ARGS = [
@@ -1434,7 +1434,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    "WinGo_1M", 
+                gameCode:    "WinGo_30S", 
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
@@ -1855,9 +1855,7 @@ function shouldSkipByThreeMatches(lastResult, historyResults) {
         if (matchNumber !== target || nextNumber === null) continue;
 
         matches.push({
-            matchIssue: String(historyResults[index]?.issueNumber ?? ''),
             matchNumber,
-            nextIssue: String(historyResults[index - 1]?.issueNumber ?? ''),
             nextNumber,
             nextSize: getSide(nextNumber)
         });
@@ -1866,7 +1864,11 @@ function shouldSkipByThreeMatches(lastResult, historyResults) {
     }
 
     if (matches.length < 3) {
-        return { skip: false, matches, reason: `Only ${matches.length} historical match(es) found; 3 required` };
+        return {
+            skip: false,
+            matches,
+            reason: `Only ${matches.length} historical match(es) found; 3 required`
+        };
     }
 
     const sizes = matches.map(match => match.nextSize);
@@ -1883,53 +1885,6 @@ function shouldSkipByThreeMatches(lastResult, historyResults) {
     };
 }
 
-// Exact live-site ordered-pair gate. historyResults is newest first:
-// [0] newest, [1] second newest, and earlier pairs are [i] -> [i - 1].
-function shouldSkipByPairMatch(historyResults) {
-    if (!Array.isArray(historyResults) || historyResults.length < 3) {
-        return { skip: true, pair: null, found: false, reason: 'Not enough API history for 2-result pair check' };
-    }
-
-    const latestA = latestResultNumber(historyResults[1]);
-    const latestB = latestResultNumber(historyResults[0]);
-    if (latestA === null || latestB === null) {
-        return { skip: true, pair: null, found: false, reason: 'Latest 2 results are not valid numbers' };
-    }
-
-    const pair = `${latestA}-${latestB}`;
-    const historicalLimit = Math.min(historyResults.length - 1, 201);
-    let found = false;
-    let foundAt = null;
-
-    for (let index = 2; index < historicalLimit; index++) {
-        const older = latestResultNumber(historyResults[index]);
-        const newer = latestResultNumber(historyResults[index - 1]);
-        if (older === latestA && newer === latestB) {
-            found = true;
-            foundAt = {
-                olderIssue: String(historyResults[index]?.issueNumber ?? ''),
-                newerIssue: String(historyResults[index - 1]?.issueNumber ?? '')
-            };
-            break;
-        }
-    }
-
-    return {
-        skip: !found,
-        pair,
-        found,
-        foundAt,
-        searchedPairs: Math.max(0, historicalLimit - 2),
-        reason: found
-            ? `Pair ${pair} found in earlier 200 historical results; prediction allowed`
-            : `Pair ${pair} not found in earlier 200 historical results; prediction skipped`
-    };
-}
-
-function cfgForPredictionMode(userId) {
-    return String(autobetCfg[userId]?.mode || 'SIZE').toUpperCase();
-}
-
 async function decidePrediction(list, currentPeriod, userId) {
     initState(userId);
     const history = Array.isArray(list) ? list.slice().sort((a, b) => {
@@ -1943,25 +1898,13 @@ async function decidePrediction(list, currentPeriod, userId) {
     }) : [];
 
     const latest = history.length ? latestResultNumber(history[0]) : null;
-    if (latest === null) return { skip: true, reason: 'API returned no valid latest result' };
-
-    // BigSmall+Number must follow the public live engine's two gates exactly.
-    // Other modes retain their existing behavior unless they opt into COMBINED.
-    const skipCheck = shouldSkipByThreeMatches(latest, history);
-    const pairCheck = cfgForPredictionMode(userId) === 'COMBINED'
-        ? shouldSkipByPairMatch(history)
-        : { skip: false, pair: null, found: true, reason: 'Pair gate not required for this mode' };
-    if (skipCheck.skip || pairCheck.skip) {
-        return {
-            skip: true,
-            reason: [skipCheck.skip ? `3-MATCH: ${skipCheck.reason}` : null, pairCheck.skip ? `PAIR: ${pairCheck.reason}` : null].filter(Boolean).join(' | '),
-            skipMatches: skipCheck.matches,
-            pairCheck
-        };
+    const skipCheck = latest !== null ? shouldSkipByThreeMatches(latest, history) : null;
+    if (skipCheck?.skip) {
+        return { skip: true, reason: skipCheck.reason, skipMatches: skipCheck.matches };
     }
 
-    const selected = getPredictionSelection(latest, history);
-    if (!selected) return { skip: true, reason: 'API returned no valid opposite-size number' };
+    let selected = latest !== null ? getPredictionSelection(latest, history) : null;
+    if (!selected) return { skip: true, reason: 'API returned no valid latest result' };
 
 
     const [size, number] = selected.mapping;
@@ -2210,9 +2153,16 @@ async function runPredict(userId, chatId) {
         canBet = false;
     } else {
         canBet = true;
-        const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
-        const curBet = sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
-        abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
+        if (cfg.mode === "COMBINED") {
+            const amounts = getCombinedBetAmounts(userId, st.sizeLevel, st.numberLevel);
+            abLine = (st.sizeLevel > 1 || st.numberLevel > 1 ? "📈 MART " : "💰 BET ") +
+                "S-L" + amounts.sizeLevel + ": ₹" + amounts.size +
+                " | N-L" + amounts.numberLevel + ": ₹" + amounts.number;
+        } else {
+            const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
+            const curBet = sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
+            abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
+        }
     }
 
     const patternName = signal && signal.pat ? signal.pat : (state && state.mode ? state.mode : "NORMAL");
@@ -2223,8 +2173,9 @@ async function runPredict(userId, chatId) {
 "║    👑 EARN WITH ME AI    ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
-"║ Mode    : BIG/SMALL\n"+
+"║ Mode    : "+modeLabel(cfg.mode)+"\n"+
 "║ Size    : "+signal.val+"\n"+
+"║ Number  : "+(signal.number ?? signal.bets?.find(b => b.type === "NUMBER")?.val ?? "-")+"\n"+
 "║ Result  : "+formatPrediction(signal)+"\n"+
 "║ Source  : Live Jade site\n"+
 "╠══════════════════════════╣\n"+
@@ -2364,10 +2315,10 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         const evaluationBets = betPlaced ? bets : (Array.isArray(predictedBets) ? predictedBets : []);
         const sizeMatched = evaluationBets.some(b => b.type === "SIZE" && b.val === actualSize);
         const numberMatched = evaluationBets.some(b => b.type === "NUMBER" && Number(b.val) === num);
-        const isCombinedBet = evaluationBets.some(b => b.type === "SIZE") && evaluationBets.some(b => b.type === "NUMBER");
-        // In COMBINED mode, a NUMBER win resets both size and number levels,
-        // even if the size leg was not placed or did not match.
-        const combinedResult = cfg.mode === "COMBINED" && (isCombinedBet || numberMatched);
+        // Combined mode owns both level counters. Even if one leg failed to
+        // place and only SIZE or only NUMBER is confirmed, a successful leg
+        // must reset BOTH counters back to L1.
+        const isCombinedBet = cfg.mode === "COMBINED" && evaluationBets.some(b => b.type === "SIZE" || b.type === "NUMBER");
         const settlement = betPlaced ? calculateSettlement(bets, actualSize, num) : null;
         const win = settlement ? settlement.won : evaluationBets.some(b => b.type === "NUMBER"
             ? Number(b.val) === num
@@ -2382,12 +2333,12 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
             while (keys.length > MAX_LEVEL_HISTORY) delete st.levelHistory[keys.shift()];
         }
 
-        if (combinedResult) updateCombinedAfterResult(userId, sizeMatched, numberMatched, betPlaced);
+        if (isCombinedBet) updateCombinedAfterResult(userId, sizeMatched, numberMatched, betPlaced);
         else updateAfterResult(userId, win, actualSize, betPlaced);
 
         const s = stats[userId];
         if (betPlaced) {
-            if (combinedResult) {
+            if (isCombinedBet) {
                 if (sizeMatched) s.sizeLevelWins["L" + sizeBetLevel] = (s.sizeLevelWins["L" + sizeBetLevel] || 0) + 1;
                 if (numberMatched) s.numberLevelWins["L" + numberBetLevel] = (s.numberLevelWins["L" + numberBetLevel] || 0) + 1;
             } else if (win) {
@@ -3025,16 +2976,28 @@ formatMartingale(cfg)+"\n\n"+
         if(text==="🎮 Mode: Big/Small"){
             delete userAction[id];
             autobetCfg[id].mode="SIZE";
+            autobetState[id].level=1;
+            autobetState[id].sizeLevel=1;
+            autobetState[id].numberLevel=1;
+            autobetState[id].inMart=false;
             return send(id,"✅ Mode set: BIG/SMALL\nCategory bet enabled.",{reply_markup:autobetMenu});
         }
         if(text==="🔢 Mode: Number"){
             delete userAction[id];
             autobetCfg[id].mode="NUMBER";
+            autobetState[id].level=1;
+            autobetState[id].sizeLevel=1;
+            autobetState[id].numberLevel=1;
+            autobetState[id].inMart=false;
             return send(id,"✅ Mode set: NUMBER\nExact Num_5 bet enabled.",{reply_markup:autobetMenu});
         }
         if(text==="🔀 Mode: BigSmall+Number"){
             delete userAction[id];
             autobetCfg[id].mode="COMBINED";
+            autobetState[id].level=1;
+            autobetState[id].sizeLevel=1;
+            autobetState[id].numberLevel=1;
+            autobetState[id].inMart=false;
             return send(id,"✅ Mode set: BIG/SMALL + NUMBER\nOne site size bet + one site number bet.",{reply_markup:autobetMenu});
         }
         if(text==="💰 Set Base Bet"){userAction[id]={action:"setbase"};return send(id,"Enter base bet amount (e.g. 1):");}
