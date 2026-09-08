@@ -372,7 +372,7 @@ async function solveCaptcha(page) {
 }
 
 // ============================================================
-//  COMPLETE LOGIN WITH DIRECT URL NAVIGATION TO WINGO 30S
+//  COMPLETE LOGIN WITH DIRECT URL NAVIGATION TO WINGO 1M
 // ============================================================
 
 async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
@@ -567,10 +567,10 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
         } catch (e) {}
         await sleep(3000);
         
-        console.log('[LOGIN] Navigating to WinGo 30S page to trigger GetBalance request...');
-        console.log('[LOGIN] Navigating directly to WinGo 30S page via URL...');
+        console.log('[LOGIN] Navigating to WinGo 1M page to trigger GetBalance request...');
+        console.log('[LOGIN] Navigating directly to WinGo 1M page via URL...');
         try {
-            await page.goto(SITE_URL + '/WinGo/WinGo_30S', {
+            await page.goto(SITE_URL + '/WinGo/WinGo_1M', {
                 waitUntil: 'domcontentloaded',
                 timeout: 30000
             });
@@ -650,7 +650,7 @@ const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YV
 const BET_URL     = "https://api.ar-lottery01.com/api/Lottery/WinGoBet";
 const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
-const API_URL     = "https://luciferapi.com/30sec.php";
+const API_URL     = "https://luciferapi.com/1min.php";
 const DRAW_URL    = API_URL;
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
@@ -1434,7 +1434,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    "WinGo_30S", 
+                gameCode:    "WinGo_1M", 
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
