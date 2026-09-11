@@ -372,7 +372,7 @@ async function solveCaptcha(page) {
 }
 
 // ============================================================
-//  COMPLETE LOGIN WITH DIRECT URL NAVIGATION TO WINGO 30S
+//  COMPLETE LOGIN WITH DIRECT URL NAVIGATION TO WINGO 1M
 // ============================================================
 
 async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
@@ -567,10 +567,10 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
         } catch (e) {}
         await sleep(3000);
         
-        console.log('[LOGIN] Navigating to WinGo 30S page to trigger GetBalance request...');
-        console.log('[LOGIN] Navigating directly to WinGo 30S page via URL...');
+        console.log('[LOGIN] Navigating to WinGo 1M page to trigger GetBalance request...');
+        console.log('[LOGIN] Navigating directly to WinGo 1M page via URL...');
         try {
-            await page.goto(SITE_URL + '/WinGo/WinGo_30S', {
+            await page.goto(SITE_URL + '/WinGo/WinGo_1M', {
                 waitUntil: 'domcontentloaded',
                 timeout: 30000
             });
@@ -640,22 +640,22 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
 // ============================================================
 // Keep secrets outside the source code.
 const BOT_TOKEN    = process.env.BOT_TOKEN || "8687914335:AAFmAN__B884yE1K6a8WnitedGS-IYBAD08";
-const OWNER_ID     = 1865939951;
-const OWNER_PASS   = "praveensaran";
-const ADMIN_HANDLE = "@lucifer1570";
-const REG_LINK     = "https://www.ts777.co";
+const OWNER_ID     = 8869874751;
+const OWNER_PASS   = process.env.OWNER_PASS || "2004";
+const ADMIN_HANDLE = "@Sivakutty1";
+const REG_LINK     = "https://13l.life/register?inviteCode=DDXKKFN&from=web07";
 const WIN_STICKER  = "CAACAgUAAxkBAAFHUGNp4JX1-ohP4uBEWpfNptaz-HmwVgAC4hgAAhboKVbObuGuTcMs2zsE";
 const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YVYiydObSa0O8zsE";
 
 const BET_URL     = "https://api.ar-lottery01.com/api/Lottery/WinGoBet";
 const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
-// One-minute result source used by dancing-cascaron-b6b408.netlify.app.
-// Response shape: { data: [{ issueNumber, number, ... }, ... ] }.
-const API_URL     = "https://luciferapi.com/index.php";
-const DRAW_URL    = API_URL;
-const SITE_URL    = "https://www.ts777.co";
-const LOGIN_PAGE_URL = "https://www.ts777.co/login";
+const API_URL     = "https://luciferapi.com";
+// Same live source used by the Netlify prediction page. The bot polls this
+// JSON endpoint; it never refreshes the webpage and keeps only bounded state.
+const DRAW_URL    = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json";
+const SITE_URL    = "https://13lwin19.com";
+const LOGIN_PAGE_URL = "https://13lwin19.com/login";
 const CHROME_ARGS = [
     '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu',
     '--disable-dev-shm-usage', '--disable-extensions', '--disable-background-networking',
@@ -899,6 +899,8 @@ function scheduleRun(userId, chatId, delayMs) {
     nextRunTimers.set(key, timer);
 }
 const MAX_LEVEL_HISTORY = 10;
+let consecutiveSkipRemaining = 0;
+let consecutiveSkipTriggerKey = null;
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -955,6 +957,49 @@ async function fetchList() {
         });
     } catch (error) {
         console.error("[FETCH LIST ERROR]", error.message);
+    }
+
+    try {
+        const fallbackResponse = await axios.get("https://gorgeous-maamoul-72bc10.netlify.app/", {
+            timeout: 15000,
+            headers: {
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "Mozilla/5.0"
+            }
+        });
+
+        const html = String(fallbackResponse?.data || "");
+        const issueMatch = html.match(/Issue\s+(\d+)\s+·\s+Active prediction/i) || html.match(/Issue\s+(\d+)/i);
+        const lastResultMatch = html.match(/CURRENT LAST RESULT\s+(\d+)\s*\(([A-Z]+)\)/i);
+        const historyMatches = [...html.matchAll(/R\d+\s*[^\d]*(\d+)(?:\s*(?:SMALL|BIG))?/gi)];
+
+        const fallbackList = [];
+        if (issueMatch && lastResultMatch) {
+            fallbackList.push({
+                issueNumber: issueMatch[1],
+                number: lastResultMatch[1]
+            });
+        }
+
+        const history = historyMatches
+            .map(match => match[1])
+            .filter((value, index, arr) => value && arr.indexOf(value) === index)
+            .slice(0, 10)
+            .map((value, index) => ({
+                issueNumber: String(Date.now() + index),
+                number: value
+            }));
+
+        if (fallbackList.length) {
+            const merged = [...history, ...fallbackList].filter(item => /^[0-9]$/.test(String(item.number).replace(/\D/g, ""))).slice(0, 8);
+            if (merged.length) return merged.sort((a, b) => String(b.issueNumber).localeCompare(String(a.issueNumber)));
+        }
+
+        if (history.length) return history.slice(0, 8);
+        console.error("[FETCH LIST ERROR] Public prediction page fallback did not contain a valid latest result");
+        return null;
+    } catch (fallbackError) {
+        console.error("[FETCH LIST ERROR] Fallback source also failed:", fallbackError.message);
         return null;
     }
 }
@@ -1056,8 +1101,7 @@ function initUser(id) {
             startLevel: 1,
             currentLevel: 1,
             profitSwitchStep: 0,
-            nextProfitSwitch: 0,
-            balanceSwitches: []
+            nextProfitSwitch: 0
         }
     };
     if (autobetCfg[id].mode !== "SIZE" && autobetCfg[id].mode !== "NUMBER" && autobetCfg[id].mode !== "COMBINED") autobetCfg[id].mode = "SIZE";
@@ -1436,7 +1480,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    "WinGo_30S", 
+                gameCode:    "WinGo_1M", 
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
@@ -1646,14 +1690,6 @@ function createWalletPlan(walletBalance, levels) {
     });
 }
 
-function getBalanceSwitchLevel(plan, walletBalance) {
-    const fallback = Math.max(1, Math.min(10, Number(plan.startLevel) || 1));
-    const switches = Array.isArray(plan.balanceSwitches) ? plan.balanceSwitches : [];
-    return switches.reduce((level, rule) => {
-        return walletBalance >= Number(rule.balance) ? Number(rule.level) : level;
-    }, fallback);
-}
-
 function syncProfitPlan(userId, reason = "balance", planBalance = null, maxLevel = null) {
     const cfg = autobetCfg[userId];
     if (!cfg || !cfg.profitPlan || !cfg.profitPlan.enabled) return false;
@@ -1664,7 +1700,8 @@ function syncProfitPlan(userId, reason = "balance", planBalance = null, maxLevel
     const configuredMaxLevel = Number(maxLevel ?? plan.maxLevel ?? cfg.maxLvl);
     const levels = Math.floor(configuredMaxLevel);
     if (configuredBalance <= 0 || !Number.isInteger(levels) || levels <= 0 || levels > 10 || configuredBalance < levels) return false;
-    const startLevel = Math.min(levels, getBalanceSwitchLevel(plan, configuredBalance));
+
+    const startLevel = Math.max(1, Math.min(levels, Number(plan.startLevel) || 1));
     const walletPlan = createWalletPlan(Math.max(0, configuredBalance), levels);
     const totals = walletPlan.map(row => row.total);
     const sizeBets = walletPlan.map(row => row.bs);
@@ -1681,7 +1718,6 @@ function syncProfitPlan(userId, reason = "balance", planBalance = null, maxLevel
     cfg.customNumberBets = numberBets;
     cfg.maxLvl = walletPlan.length;
 
-    // Losses keep martingale progression; wins restart at the balance-selected level.
     if (autobetState[userId] && reason !== "loss") {
         autobetState[userId].level = startLevel;
         autobetState[userId].sizeLevel = startLevel;
@@ -1798,32 +1834,44 @@ function getSide(n) {
     return Number(n) >= 5 ? 'BIG' : 'SMALL';
 }
 
+function sharedHtmlAnalysis(historyResults) {
+    if (!Array.isArray(historyResults) || !historyResults.length) return null;
+    if (historyResults.length < 5) return getSide(latestResultNumber(historyResults[0]));
+
+    let bigs = 0;
+    let smalls = 0;
+    for (let index = 0; index < Math.min(10, historyResults.length); index++) {
+        const number = latestResultNumber(historyResults[index]);
+        if (number === null) continue;
+        const weight = 10 - index;
+        if (number >= 5) bigs += weight;
+        else smalls += weight;
+    }
+
+    const last3 = historyResults.slice(0, 3).map(item => getSide(latestResultNumber(item)));
+    if (last3.length === 3 && last3[0] === last3[1] && last3[1] === last3[2]) {
+        return last3[0] === 'BIG' ? 'SMALL' : 'BIG';
+    }
+    return bigs >= smalls ? 'BIG' : 'SMALL';
+}
+
 function getPredictionSelection(lastResult, historyResults) {
     const n = Number(lastResult);
     if (!Number.isInteger(n) || n < 0 || n > 9 || !Array.isArray(historyResults) || historyResults.length < 2) return null;
 
-    const predictionSize = getSide(n);
-    const oppositeSize = predictionSize === 'BIG' ? 'SMALL' : 'BIG';
-    let selectedNumber = null;
-    let selectedIndex = -1;
-
-    for (let index = 1; index < historyResults.length; index++) {
-        const candidate = latestResultNumber(historyResults[index]);
-        if (candidate !== null && getSide(candidate) === oppositeSize) {
-            selectedNumber = candidate;
-            selectedIndex = index;
-            break;
-        }
-    }
-
-    if (selectedNumber === null) return null;
+    const analysisSize = sharedHtmlAnalysis(historyResults) || getSide(n);
+    const oppositePool = analysisSize === 'BIG' ? [0, 1, 2, 3, 4] : [5, 6, 7, 8, 9];
+    const latestIssue = String(historyResults[0]?.issueNumber ?? historyResults[0]?.issue ?? '');
+    const nextIssue = /^\d+$/.test(latestIssue) ? (BigInt(latestIssue) + 1n).toString() : latestIssue;
+    const periodSeed = Number(String(nextIssue).slice(-6)) || 0;
+    const selectedNumber = oppositePool[(periodSeed + n * 31) % oppositePool.length];
 
     return {
-        mapping: [predictionSize, selectedNumber],
-        mode: 'OPPOSITE_SIZE_MOST_RECENT',
+        // Analysis BIG -> SMALL number 0-4; analysis SMALL -> BIG number 5-9.
+        mapping: [analysisSize, selectedNumber],
+        mode: 'OPPOSITE_NUMBER_POOL',
         candidates: [selectedNumber],
-        matchedApiIndex: selectedIndex,
-        decisionReason: `Selected most-recent ${oppositeSize} number`
+        decisionReason: `Analysis ${analysisSize} -> opposite number pool ${oppositePool[0]}-${oppositePool[oppositePool.length - 1]}`
     };
 }
 
@@ -1857,7 +1905,9 @@ function shouldSkipByThreeMatches(lastResult, historyResults) {
         if (matchNumber !== target || nextNumber === null) continue;
 
         matches.push({
+            matchIssue: String(historyResults[index]?.issueNumber ?? ''),
             matchNumber,
+            nextIssue: String(historyResults[index - 1]?.issueNumber ?? ''),
             nextNumber,
             nextSize: getSide(nextNumber)
         });
@@ -1866,11 +1916,7 @@ function shouldSkipByThreeMatches(lastResult, historyResults) {
     }
 
     if (matches.length < 3) {
-        return {
-            skip: false,
-            matches,
-            reason: `Only ${matches.length} historical match(es) found; 3 required`
-        };
+        return { skip: false, matches, reason: `Only ${matches.length} historical match(es) found; 3 required` };
     }
 
     const sizes = matches.map(match => match.nextSize);
@@ -1887,6 +1933,76 @@ function shouldSkipByThreeMatches(lastResult, historyResults) {
     };
 }
 
+// Exact live-site ordered-pair gate. historyResults is newest first:
+// [0] newest, [1] second newest, and earlier pairs are [i] -> [i - 1].
+function shouldSkipByPairMatch(historyResults) {
+    if (!Array.isArray(historyResults) || historyResults.length < 3) {
+        return { skip: true, pair: null, found: false, reason: 'Not enough API history for 2-result pair check' };
+    }
+
+    const latestA = latestResultNumber(historyResults[1]);
+    const latestB = latestResultNumber(historyResults[0]);
+    if (latestA === null || latestB === null) {
+        return { skip: true, pair: null, found: false, reason: 'Latest 2 results are not valid numbers' };
+    }
+
+    const pair = `${latestA}-${latestB}`;
+    const historicalLimit = Math.min(historyResults.length - 1, 201);
+    let found = false;
+    let foundAt = null;
+
+    for (let index = 2; index < historicalLimit; index++) {
+        const older = latestResultNumber(historyResults[index]);
+        const newer = latestResultNumber(historyResults[index - 1]);
+        if (older === latestA && newer === latestB) {
+            found = true;
+            foundAt = {
+                olderIssue: String(historyResults[index]?.issueNumber ?? ''),
+                newerIssue: String(historyResults[index - 1]?.issueNumber ?? '')
+            };
+            break;
+        }
+    }
+
+    return {
+        skip: !found,
+        pair,
+        found,
+        foundAt,
+        searchedPairs: Math.max(0, historicalLimit - 2),
+        reason: found
+            ? `Pair ${pair} found in earlier 200 historical results; prediction allowed`
+            : `Pair ${pair} not found in earlier 200 historical results; prediction skipped`
+    };
+}
+
+function getConsecutivePairCheck(historyResults) {
+    if (!Array.isArray(historyResults) || historyResults.length < 2) {
+        return { consecutive: false, pair: null, reason: 'Not enough API history for consecutive pair check' };
+    }
+
+    const a = latestResultNumber(historyResults[1]);
+    const b = latestResultNumber(historyResults[0]);
+    if (a === null || b === null) {
+        return { consecutive: false, pair: null, reason: 'Latest 2 results are not valid numbers' };
+    }
+
+    const pair = `${a}-${b}`;
+    const consecutive = Number.isInteger(a) && Number.isInteger(b) && a >= 0 && a <= 9 && b >= 0 && b <= 9 && Math.abs(a - b) === 1;
+
+    return {
+        consecutive,
+        pair,
+        reason: consecutive
+            ? `Consecutive pair ${pair} detected`
+            : `Pair ${pair} is not consecutive`
+    };
+}
+
+function cfgForPredictionMode(userId) {
+    return String(autobetCfg[userId]?.mode || 'SIZE').toUpperCase();
+}
+
 async function decidePrediction(list, currentPeriod, userId) {
     initState(userId);
     const history = Array.isArray(list) ? list.slice().sort((a, b) => {
@@ -1900,14 +2016,10 @@ async function decidePrediction(list, currentPeriod, userId) {
     }) : [];
 
     const latest = history.length ? latestResultNumber(history[0]) : null;
-    const skipCheck = latest !== null ? shouldSkipByThreeMatches(latest, history) : null;
-    if (skipCheck?.skip) {
-        return { skip: true, reason: skipCheck.reason, skipMatches: skipCheck.matches };
-    }
+    if (latest === null) return { skip: true, reason: 'API returned no valid latest result' };
 
-    let selected = latest !== null ? getPredictionSelection(latest, history) : null;
-    if (!selected) return { skip: true, reason: 'API returned no valid latest result' };
-
+    const selected = getPredictionSelection(latest, history);
+    if (!selected) return { skip: true, reason: 'API returned no valid opposite-size number' };
 
     const [size, number] = selected.mapping;
     userStates[userId].lastPrediction = size;
@@ -2025,8 +2137,7 @@ async function handleWin(userId, chatId, actual, num, betLevel, bets = [], settl
     if(pt.winStreak > pt.maxW) pt.maxW = pt.winStreak;
     const plan = autobetCfg[userId].profitPlan;
     const switchStep = Math.floor(Number(plan?.profitSwitchStep) || 0);
-    const hasBalanceSwitches = plan?.enabled && Array.isArray(plan.balanceSwitches) && plan.balanceSwitches.length > 0;
-    const shouldSwitchPlan = !plan?.enabled || switchStep <= 0 || pt.pnl >= Number(plan.nextProfitSwitch || switchStep) || hasBalanceSwitches;
+    const shouldSwitchPlan = plan?.enabled && switchStep > 0 && pt.pnl >= Number(plan.nextProfitSwitch || switchStep);
     if (shouldSwitchPlan) {
         const previousLevel = Number(plan?.currentLevel) || 1;
         await refreshWalletPlan(userId, "win");
@@ -2037,9 +2148,8 @@ async function handleWin(userId, chatId, actual, num, betLevel, bets = [], settl
             const currentLevel = Number(plan.currentLevel) || 1;
             const sizePlan = (autobetCfg[userId].customSizeBets || []).slice(0, autobetCfg[userId].maxLvl).join(" → ₹");
             const numberPlan = (autobetCfg[userId].customNumberBets || []).slice(0, autobetCfg[userId].maxLvl).join(" → ₹");
-            const switchLabel = currentLevel !== previousLevel ? "💰 Balance switch" : "🔄 Plan switched";
             await send(chatId,
-                switchLabel + ": L" + previousLevel + " → L" + currentLevel +
+                "🔄 Plan switched: L" + previousLevel + " → L" + currentLevel +
                 "\nSize: ₹" + sizePlan +
                 "\nNumber: ₹" + numberPlan
             );
@@ -2064,7 +2174,7 @@ async function handleLoss(userId, chatId, actual, num, betLevel, bets = [], sett
     if(pt.lossStreak > pt.maxL) pt.maxL = pt.lossStreak;
 
     const plan = autobetCfg[userId].profitPlan;
-    if (plan?.enabled && Array.isArray(plan.balanceSwitches) && plan.balanceSwitches.length > 0) {
+    if (plan?.enabled && plan?.profitSwitchStep > 0 && pt.pnl <= 0) {
         await refreshWalletPlan(userId, "loss");
     }
 
@@ -2155,16 +2265,9 @@ async function runPredict(userId, chatId) {
         canBet = false;
     } else {
         canBet = true;
-        if (cfg.mode === "COMBINED") {
-            const amounts = getCombinedBetAmounts(userId, st.sizeLevel, st.numberLevel);
-            abLine = (st.sizeLevel > 1 || st.numberLevel > 1 ? "📈 MART " : "💰 BET ") +
-                "S-L" + amounts.sizeLevel + ": ₹" + amounts.size +
-                " | N-L" + amounts.numberLevel + ": ₹" + amounts.number;
-        } else {
-            const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
-            const curBet = sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
-            abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
-        }
+        const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
+        const curBet = sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
+        abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     }
 
     const patternName = signal && signal.pat ? signal.pat : (state && state.mode ? state.mode : "NORMAL");
@@ -2175,9 +2278,8 @@ async function runPredict(userId, chatId) {
 "║    👑 EARN WITH ME AI    ║\n"+
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
-"║ Mode    : "+modeLabel(cfg.mode)+"\n"+
+"║ Mode    : BIG/SMALL\n"+
 "║ Size    : "+signal.val+"\n"+
-"║ Number  : "+(signal.number ?? signal.bets?.find(b => b.type === "NUMBER")?.val ?? "-")+"\n"+
 "║ Result  : "+formatPrediction(signal)+"\n"+
 "║ Source  : Live Jade site\n"+
 "╠══════════════════════════╣\n"+
@@ -2317,10 +2419,10 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         const evaluationBets = betPlaced ? bets : (Array.isArray(predictedBets) ? predictedBets : []);
         const sizeMatched = evaluationBets.some(b => b.type === "SIZE" && b.val === actualSize);
         const numberMatched = evaluationBets.some(b => b.type === "NUMBER" && Number(b.val) === num);
-        // Combined mode owns both level counters. Even if one leg failed to
-        // place and only SIZE or only NUMBER is confirmed, a successful leg
-        // must reset BOTH counters back to L1.
-        const isCombinedBet = cfg.mode === "COMBINED" && evaluationBets.some(b => b.type === "SIZE" || b.type === "NUMBER");
+        const isCombinedBet = evaluationBets.some(b => b.type === "SIZE") && evaluationBets.some(b => b.type === "NUMBER");
+        // In COMBINED mode, a NUMBER win resets both size and number levels,
+        // even if the size leg was not placed or did not match.
+        const combinedResult = cfg.mode === "COMBINED" && (isCombinedBet || numberMatched);
         const settlement = betPlaced ? calculateSettlement(bets, actualSize, num) : null;
         const win = settlement ? settlement.won : evaluationBets.some(b => b.type === "NUMBER"
             ? Number(b.val) === num
@@ -2335,12 +2437,12 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
             while (keys.length > MAX_LEVEL_HISTORY) delete st.levelHistory[keys.shift()];
         }
 
-        if (isCombinedBet) updateCombinedAfterResult(userId, sizeMatched, numberMatched, betPlaced);
+        if (combinedResult) updateCombinedAfterResult(userId, sizeMatched, numberMatched, betPlaced);
         else updateAfterResult(userId, win, actualSize, betPlaced);
 
         const s = stats[userId];
         if (betPlaced) {
-            if (isCombinedBet) {
+            if (combinedResult) {
                 if (sizeMatched) s.sizeLevelWins["L" + sizeBetLevel] = (s.sizeLevelWins["L" + sizeBetLevel] || 0) + 1;
                 if (numberMatched) s.numberLevelWins["L" + numberBetLevel] = (s.numberLevelWins["L" + numberBetLevel] || 0) + 1;
             } else if (win) {
@@ -2535,7 +2637,6 @@ const autobetMenu={keyboard:[
     ["💰 Set Base Bet","📈 Set Max Level"],
     ["🧠 Set Plan Level","🎯 Set Profit Target"],
     ["💹 Set Profit Switch"],
-    ["🔁 Set Balance Switch","🗑 Clear Balance Switch"],
     ["⏳ Set Section Delay","🔢 Set Watch Losses"],
     ["📊 AutoBet Status","🔀 Customize Bet"],
     ["🎮 Mode: Big/Small","🔢 Mode: Number"],
@@ -2978,28 +3079,16 @@ formatMartingale(cfg)+"\n\n"+
         if(text==="🎮 Mode: Big/Small"){
             delete userAction[id];
             autobetCfg[id].mode="SIZE";
-            autobetState[id].level=1;
-            autobetState[id].sizeLevel=1;
-            autobetState[id].numberLevel=1;
-            autobetState[id].inMart=false;
             return send(id,"✅ Mode set: BIG/SMALL\nCategory bet enabled.",{reply_markup:autobetMenu});
         }
         if(text==="🔢 Mode: Number"){
             delete userAction[id];
             autobetCfg[id].mode="NUMBER";
-            autobetState[id].level=1;
-            autobetState[id].sizeLevel=1;
-            autobetState[id].numberLevel=1;
-            autobetState[id].inMart=false;
             return send(id,"✅ Mode set: NUMBER\nExact Num_5 bet enabled.",{reply_markup:autobetMenu});
         }
         if(text==="🔀 Mode: BigSmall+Number"){
             delete userAction[id];
             autobetCfg[id].mode="COMBINED";
-            autobetState[id].level=1;
-            autobetState[id].sizeLevel=1;
-            autobetState[id].numberLevel=1;
-            autobetState[id].inMart=false;
             return send(id,"✅ Mode set: BIG/SMALL + NUMBER\nOne site size bet + one site number bet.",{reply_markup:autobetMenu});
         }
         if(text==="💰 Set Base Bet"){userAction[id]={action:"setbase"};return send(id,"Enter base bet amount (e.g. 1):");}
@@ -3008,16 +3097,6 @@ formatMartingale(cfg)+"\n\n"+
         if(text==="💹 Set Profit Switch"){
             userAction[id]={action:"setprofitswitch"};
             return send(id,"Enter profit switch amount in whole rupees:\nExample: 5 or 10\n\nThe plan switches after each cumulative profit step.");
-        }
-        if(text==="🔁 Set Balance Switch"){
-            userAction[id]={action:"setbalanceswitch"};
-            return send(id,"Enter balance switches, for example:\n5000:2,10000:4,25000:6\n\nFormat: balance:level");
-        }
-        if(text==="🗑 Clear Balance Switch"){
-            autobetCfg[id].profitPlan = autobetCfg[id].profitPlan || { enabled:false, startLevel:1, currentLevel:1, balanceSwitches:[] };
-            autobetCfg[id].profitPlan.balanceSwitches = [];
-            if (autobetCfg[id].profitPlan.enabled) await refreshWalletPlan(id, "switch-clear");
-            return send(id,"✅ Balance switches cleared. The configured start level is now used.",{reply_markup:autobetMenu});
         }
                 // --- SETTINGS TRIGGERS ---
         if(text==="🎯 Set Profit Target"){userAction[id]={action:"settarget"};return send(id,"Enter target profit (Min ₹10):");}
@@ -3051,7 +3130,7 @@ if(text==="🔢 Set Watch Losses"){
                 if (!Number.isFinite(planBalance) || planBalance <= 0 || planBalance < maxLevel) {
                     return send(id, "❌ Actual wallet balance ₹" + (Number.isFinite(planBalance) ? planBalance : 0) + " is too low for " + maxLevel + " levels.");
                 }
-                if (!autobetCfg[id].profitPlan) autobetCfg[id].profitPlan = { enabled: false, startLevel: 1, currentLevel: 1, balanceSwitches: [] };
+                if (!autobetCfg[id].profitPlan) autobetCfg[id].profitPlan = { enabled: false, startLevel: 1, currentLevel: 1 };
                 autobetCfg[id].profitPlan.enabled = true;
                 autobetCfg[id].profitPlan.startLevel = 1;
                 autobetCfg[id].profitPlan.currentLevel = 1;
@@ -3067,7 +3146,7 @@ if(text==="🔢 Set Watch Losses"){
                 if (!Number.isInteger(step) || step <= 0) {
                     return send(id, "❌ Enter a whole positive amount, for example: 5 or 10");
                 }
-                if (!autobetCfg[id].profitPlan) autobetCfg[id].profitPlan = { enabled: false, startLevel: 1, currentLevel: 1, balanceSwitches: [] };
+                if (!autobetCfg[id].profitPlan) autobetCfg[id].profitPlan = { enabled: false, startLevel: 1, currentLevel: 1 };
                 autobetCfg[id].profitPlan.profitSwitchStep = step;
                 autobetCfg[id].profitPlan.nextProfitSwitch = step;
                 delete userAction[id];
@@ -3082,25 +3161,6 @@ if(text==="🔢 Set Watch Losses"){
                 if (autobetCfg[id].profitPlan.enabled) await refreshWalletPlan(id, "level");
                 delete userAction[id];
                 return send(id, "✅ Profit plan started at L" + v + ".\nEach win updates the auto bet plan and syncs custom bets.", {reply_markup: autobetMenu});
-            }
-            else if(s.action === "setbalanceswitch"){
-                const rules = text.split(/[,;]+/).map(item => {
-                    const parts = item.trim().split(/[:=]/);
-                    return { balance: Number(parts[0]), level: Number(parts[1]) };
-                });
-                if (!rules.length || rules.some(rule =>
-                    !Number.isFinite(rule.balance) || rule.balance <= 0 ||
-                    !Number.isInteger(rule.level) || rule.level < 1 || rule.level > 10
-                )) {
-                    return send(id,"❌ Invalid format. Use: 5000:2,10000:4");
-                }
-                const uniqueBalances = new Set(rules.map(rule => rule.balance));
-                if (uniqueBalances.size !== rules.length) return send(id,"❌ Duplicate balance thresholds are not allowed.");
-                if (!autobetCfg[id].profitPlan) autobetCfg[id].profitPlan = { enabled:false, startLevel:1, currentLevel:1, balanceSwitches:[] };
-                autobetCfg[id].profitPlan.balanceSwitches = rules.sort((a, b) => a.balance - b.balance);
-                delete userAction[id];
-                if (autobetCfg[id].profitPlan.enabled) await refreshWalletPlan(id, "switch-set");
-                return send(id,"✅ Balance switches saved:\n" + rules.map(rule => "₹" + rule.balance + " → L" + rule.level).join("\n"),{reply_markup:autobetMenu});
             }
             else if(s.action === "settarget"){
                 const v = Number(text);
