@@ -1892,6 +1892,88 @@ function latestResultNumber(item) {
     return Number.isInteger(n) && n >= 0 && n <= 9 ? n : null;
 }
 
+// Big/Small-only formula-replay pattern engine.
+// For every older draw, replay the requested calculation and compare its
+// prediction with the actual next draw: N = match, R = mismatch.
+function formulaSizePrediction(currentPeriod, currentResult) {
+    const result = Number.parseInt(String(currentResult ?? ''), 10);
+    if (!Number.isInteger(result) || result === 0) return null;
+    try {
+        const nextLast3 = Number.parseInt(String(BigInt(String(currentPeriod)) + 1n).slice(-3), 10);
+        const answer = nextLast3 * Math.exp(result);
+        const answerStr = answer.toString();
+        const noDecimal = answerStr.replace('.', '');
+        const first14 = noDecimal.substring(0, 14);
+        const lastDigit = Number.parseInt(first14.charAt(first14.length - 1), 10);
+        if (!Number.isInteger(lastDigit)) return null;
+        return lastDigit <= 4 ? 'SMALL' : 'BIG';
+    } catch (error) {
+        return null;
+    }
+}
+
+function buildNormalRecoveryPattern(historyResults) {
+    const list = Array.isArray(historyResults) ? historyResults : [];
+    const pattern = [];
+    const calculations = [];
+    // API list is newest-first. Each index i is an old draw and i - 1 is its
+    // actual next draw, so every historical calculation can be verified.
+    for (let index = 1; index < list.length; index++) {
+        const oldItem = list[index];
+        const nextItem = list[index - 1];
+        const oldPeriod = String(oldItem?.issueNumber ?? oldItem?.issue ?? '');
+        const oldNumber = latestResultNumber(oldItem);
+        const actualNext = latestResultNumber(nextItem);
+        const calculated = formulaSizePrediction(oldPeriod, oldNumber);
+        if (!calculated || actualNext === null) continue;
+        const actualSize = getSide(actualNext);
+        const token = calculated === actualSize ? 'N' : 'R';
+        pattern.push(token);
+        calculations.push({ period: oldPeriod, result: oldNumber, calculated, actual: actualSize, token });
+    }
+    return { pattern, calculations };
+}
+
+function getPatternModeAndPrediction(historyResults) {
+    const list = Array.isArray(historyResults) ? historyResults : [];
+    const latestPeriod = String(list[0]?.issueNumber ?? list[0]?.issue ?? '');
+    const latestResult = latestResultNumber(list[0]);
+    const normalPrediction = formulaSizePrediction(latestPeriod, latestResult);
+    if (!normalPrediction) return null;
+
+    const { pattern, calculations } = buildNormalRecoveryPattern(list);
+    let mode = 'NORMAL';
+    let matchedPattern = '';
+    // Search the entire calculated N/R history, longest current suffix first.
+    for (let length = pattern.length; length >= 1; length--) {
+        const suffix = pattern.slice(0, length).join('');
+        for (let start = length; start < pattern.length; start++) {
+            const historical = pattern.slice(start, start + length).join('');
+            if (historical === suffix && pattern[start - 1]) {
+                const nextToken = pattern[start - 1];
+                mode = nextToken === 'R' ? 'RECOVERY' : 'NORMAL';
+                matchedPattern = suffix + '→' + nextToken;
+                return {
+                    mode,
+                    prediction: mode === 'RECOVERY' ? (normalPrediction === 'BIG' ? 'SMALL' : 'BIG') : normalPrediction,
+                    pattern: pattern.join(''),
+                    matchedPattern,
+                    calculations,
+                    reason: `Formula pattern ${matchedPattern} -> ${mode}`
+                };
+            }
+        }
+    }
+    return {
+        mode,
+        prediction: normalPrediction,
+        pattern: pattern.join(''),
+        matchedPattern: pattern.join(''),
+        calculations,
+        reason: 'No prior formula pattern match -> NORMAL'
+    };
+}
+
 function shouldSkipByThreeMatches(lastResult, historyResults) {
     const target = Number(lastResult);
     if (!Number.isInteger(target) || !Array.isArray(historyResults) || historyResults.length < 4) {
@@ -2017,6 +2099,30 @@ async function decidePrediction(list, currentPeriod, userId) {
 
     const latest = history.length ? latestResultNumber(history[0]) : null;
     if (latest === null) return { skip: true, reason: 'API returned no valid latest result' };
+
+    if (cfgForPredictionMode(userId) === 'SIZE') {
+        // Previous result 0: do not generate a Big/Small prediction.
+        if (latest === 0) return { skip: true, reason: 'Previous result is 0' };
+        const patternDecision = getPatternModeAndPrediction(history);
+        if (!patternDecision) return { skip: true, reason: 'API returned no valid Big/Small history' };
+        userStates[userId].lastPrediction = patternDecision.prediction;
+        userStates[userId].lastNumberPrediction = null;
+        userStates[userId].lastPredictionNumber = latest;
+        userStates[userId].lastSelectionMode = patternDecision.mode;
+        userStates[userId].lastNRPattern = patternDecision.pattern;
+        console.log(`[NR PATTERN] ${patternDecision.pattern} | ${patternDecision.reason} -> ${patternDecision.prediction}`);
+        return {
+            type: 'SIZE',
+            val: patternDecision.prediction,
+            conf: 90,
+            pat: patternDecision.mode,
+            mode: patternDecision.mode,
+            pattern: patternDecision.pattern,
+            matchedPattern: patternDecision.matchedPattern,
+            decisionReason: patternDecision.reason,
+            bets: [{ type: 'SIZE', val: patternDecision.prediction, kind: 'size' }]
+        };
+    }
 
     const selected = getPredictionSelection(latest, history);
     if (!selected) return { skip: true, reason: 'API returned no valid opposite-size number' };
@@ -2271,6 +2377,9 @@ async function runPredict(userId, chatId) {
     }
 
     const patternName = signal && signal.pat ? signal.pat : (state && state.mode ? state.mode : "NORMAL");
+    const patternLine = cfg.mode === "SIZE" && signal.pattern
+        ? "║ Pattern : " + signal.pattern + "\n║ Logic   : " + signal.decisionReason + "\n"
+        : "";
     const waitLine = "";
 
     await send(chatId,
@@ -2279,6 +2388,7 @@ async function runPredict(userId, chatId) {
 "╠══════════════════════════╣\n"+
 "║ Period  : "+next.slice(-6)+"\n"+
 "║ Mode    : BIG/SMALL\n"+
+patternLine+
 "║ Size    : "+signal.val+"\n"+
 "║ Result  : "+formatPrediction(signal)+"\n"+
 "║ Source  : Live Jade site\n"+
