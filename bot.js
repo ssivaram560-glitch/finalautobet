@@ -639,7 +639,6 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
 //  CONFIG
 // ============================================================
 // Keep secrets outside the source code.
-// Keep secrets outside the source code.
 const BOT_TOKEN    = process.env.BOT_TOKEN || "8687914335:AAFmAN__B884yE1K6a8WnitedGS-IYBAD08";
 const OWNER_ID     = 8869874751;
 const OWNER_PASS   = process.env.OWNER_PASS || "2004";
@@ -653,6 +652,7 @@ const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
 const API_URL     = "https://luciferapi.com/30sec.php";
 const DRAW_URL    = "https://luciferapi.com/30sec.php";
+const COMBINED_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
 const CHROME_ARGS = [
@@ -1002,6 +1002,76 @@ async function fetchList() {
         return null;
     }
 }
+
+// The user-provided Netlify page uses this JSON source directly.  Keep this
+// request bounded and return only a small normalized list to avoid retaining
+// large response objects in the Render free-plan process.
+async function fetchCombinedSourceList() {
+    try {
+        const response = await axios.get(COMBINED_SOURCE_URL + "?_=" + Date.now(), {
+            headers: {
+                "Accept": "application/json",
+                "Origin": "https://stirring-frangollo-6132a9.netlify.app",
+                "Referer": "https://stirring-frangollo-6132a9.netlify.app/",
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout: 8000,
+            maxContentLength: 512 * 1024,
+            maxBodyLength: 512 * 1024,
+            validateStatus: status => status >= 200 && status < 300
+        });
+        const raw = Array.isArray(response.data?.data?.list) ? response.data.data.list : [];
+        return raw.slice(0, 25).map(item => ({
+            issueNumber: String(item?.issueNumber ?? ''),
+            number: String(item?.number ?? '').replace(/\D/g, '').slice(-1),
+            color: String(item?.color ?? '')
+        })).filter(item => /^\d+$/.test(item.issueNumber) && /^[0-9]$/.test(item.number));
+    } catch (error) {
+        console.error('[COMBINED SOURCE ERROR]', error?.message || error);
+        return null;
+    }
+}
+
+function getCombinedSourcePrediction(list, userId) {
+    const latest = Array.isArray(list) && list[0];
+    const n = Number.parseInt(String(latest?.number ?? ''), 10);
+    if (!latest || !Number.isInteger(n) || n < 0 || n > 9) {
+        return { skip: true, reason: 'Combined source returned no valid latest result' };
+    }
+
+    // Exact mapping observed in the supplied Netlify page:
+    // 9/5/1/0 -> BIG 4; 8/7/6/4/3/2 -> SMALL 5.
+    const mapping = ['BIG', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG'];
+    let size = mapping[n];
+    let number = size === 'BIG' ? 4 : 5;
+    const state = userStates[String(userId)] || {};
+    const mode = state.combinedFlipNext === true ? 'FLIP' : 'DIRECT';
+    if (mode === 'FLIP') {
+        size = size === 'BIG' ? 'SMALL' : 'BIG';
+        number = size === 'BIG' ? 4 : 5;
+    }
+
+    return {
+        type: 'COMBINED',
+        val: size,
+        number,
+        mode,
+        pat: mode,
+        pattern: `SOURCE-${n}`,
+        decisionReason: `Netlify source mapping for last result ${n}${mode === 'FLIP' ? ' + loss flip' : ''}`,
+        bets: [
+            { type: 'SIZE', val: size, kind: 'size' },
+            { type: 'NUMBER', val: number, kind: 'number' }
+        ]
+    };
+}
+
+async function fetchListForUser(userId) {
+    return String(autobetCfg[userId]?.mode || '').toUpperCase() === 'COMBINED'
+        ? await fetchCombinedSourceList()
+        : await fetchList();
+}
+
 // Helper parser function
 async function parseBalanceResponse(r) {
     if (r.data && r.data.code === 0 && r.data.data && typeof r.data.data.balance !== 'undefined') {
@@ -1645,7 +1715,7 @@ function buildBSFromList(list, count = 15) {
 }
 
 function initState(userId) {
-    if (!userStates[userId]) userStates[userId] = { lastSitePrediction: null, resultHistory: [], mode: 'NORMAL', recoveryCount: 0, winBeforeLoss: 0, lossStreak: 0, history: [] };
+    if (!userStates[userId]) userStates[userId] = { lastSitePrediction: null, resultHistory: [], mode: 'NORMAL', pastedMode: false, combinedFlipNext: false, recoveryCount: 0, winBeforeLoss: 0, lossStreak: 0, history: [] };
     if (!Array.isArray(userStates[userId].resultHistory)) userStates[userId].resultHistory = [];
 }
 
@@ -2061,7 +2131,7 @@ function decidePrediction(list, currentLevel, userId) {
     const pair = getLatestTwoPattern(list);
     if (!pair) return { skip: true, reason: 'Latest 2 results are unavailable' };
 
-    const recoveryRequired = state.mode === 'RECOVERY';
+    const recoveryRequired = state.pastedMode === true;
     let prediction;
     let predictionMode;
     let decisionReason;
@@ -2075,8 +2145,8 @@ function decidePrediction(list, currentLevel, userId) {
             prediction = prediction === 'SMALL' ? 'BIG' : 'SMALL';
         }
         predictionMode = 'RECOVERY';
-        decisionReason = `3+ consecutive losses; pasted logic ${recovery.reason}` +
-            (state.mode === 'RECOVERY' ? ' + recovery opposite' : '');
+        decisionReason = `3+ consecutive losses; ${state.mode} calculation ${recovery.reason}` +
+            (state.mode === 'RECOVERY' ? ' + recovery opposite' : ' original result');
     } else {
         // BS/SB => opposite of the latest result; BB/SS => same as the latest result.
         prediction = pair.prediction;
@@ -2117,15 +2187,22 @@ function recordLossStreakHit(userId) {
 function getModeFromHistory(state) {
     const history = Array.isArray(state.history) ? state.history : [];
     const histStr = history.join(',');
-    const lossStreak = Number(state.lossStreak) || 0;
+
+    // These are the pasted_content_2.txt history rules.
     const recoveryPattern = histStr.endsWith('W,W,L') ||
                             histStr.endsWith('W,W,W,L') ||
                             /(L,L,L,L+)/.test(histStr);
     const normalPattern = histStr.endsWith('W,L') ||
                           /(W,W,W,W+),L$/.test(histStr);
-    if (lossStreak >= 3 && recoveryPattern) return 'RECOVERY';
-    if (recoveryPattern && state.mode === 'RECOVERY') return 'RECOVERY';
-    if (normalPattern || history[history.length - 1] === 'W') return 'NORMAL';
+
+    // Before the first 3-loss trigger, mode is irrelevant because the bot uses
+    // the BB/SS/BS/SB same/opposite engine.
+    if (!state.pastedMode) return 'NORMAL';
+    if (recoveryPattern) return 'RECOVERY';
+    if (normalPattern) return 'NORMAL';
+
+    // A W at the end closes the previous loss sequence: W,L,L,W is NORMAL.
+    if (history[history.length - 1] === 'W') return 'NORMAL';
     return state.mode === 'RECOVERY' ? 'RECOVERY' : 'NORMAL';
 }
 
@@ -2133,15 +2210,25 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     initUser(userId);
     initState(userId);
     const state = userStates[userId];
+
     if (!Array.isArray(state.history)) state.history = [];
     if (!Number.isInteger(state.lossStreak)) state.lossStreak = 0;
+
     state.history.push(wasWin ? 'W' : 'L');
     if (wasWin) state.lossStreak = 0;
     else state.lossStreak++;
+
+    // Three losses only activate the pasted calculation engine. They do not
+    // directly decide NORMAL/RECOVERY; old W/L history decides that mode.
+    if (!state.pastedMode && state.lossStreak >= 3) {
+        state.pastedMode = true;
+        console.log('[PREDICTION-2] 3-loss trigger: pasted calculation engine ON');
+    }
+
     const previousMode = state.mode || 'NORMAL';
     state.mode = getModeFromHistory(state);
     if (state.history.length > 20) state.history.shift();
-    console.log(`[PREDICTION-2] history=${state.history.join(',')} | lossStreak=${state.lossStreak} | mode=${previousMode}->${state.mode}`);
+    console.log(`[PREDICTION-2] history=${state.history.join(',')} | mode=${previousMode}->${state.mode} | pasted=${state.pastedMode}`);
 
     // Existing AutoBet level/martingale bookkeeping remains unchanged.
     if (typeof autobetState !== 'undefined' && autobetState[userId]) {
@@ -2307,7 +2394,7 @@ async function runPredict(userId, chatId) {
         }
     }
 
-    const list = await fetchList();
+    const list = await fetchListForUser(userId);
     if (!Array.isArray(list) || list.length === 0) {
         console.warn("[PREDICTION] Draw history unavailable; retrying without emitting a false prediction");
         scheduleRun(userId, chatId, 15000);
@@ -2337,7 +2424,9 @@ async function runPredict(userId, chatId) {
     }
 
     initState(userId);
-    const signal = await decidePrediction(list, next, userId);
+    const signal = cfg.mode === "COMBINED"
+        ? getCombinedSourcePrediction(list, userId)
+        : await decidePrediction(list, next, userId);
     if(!signal) { scheduleRun(userId, chatId, 5000); runInFlight.delete(runKey); return; }
     if (signal.skip === true) {
         console.log(`[PREDICTION] Skipping period ${next}: ${signal.reason || "skip result"}`);
@@ -2463,7 +2552,7 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
             scheduleRun(userId, chatId, 15000);
             return;
         }
-        const list = await fetchList();
+        const list = await fetchListForUser(userId);
         if (!list) {
             releaseResultCheck();
             scheduleRun(userId, chatId, 10000);
@@ -2517,6 +2606,23 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         const win = settlement ? settlement.won : evaluationBets.some(b => b.type === "NUMBER"
             ? Number(b.val) === num
             : b.type === "SIZE" && b.val === actualSize);
+        // Match the supplied page's COMBINED recovery behavior: only after a
+        // loss, if previous + current actual share both color and size, flip
+        // the next source prediction. Keep only one boolean per user.
+        if (cfg.mode === "COMBINED") {
+            const sourceState = userStates[String(userId)] || (userStates[String(userId)] = {});
+            if (!win && Array.isArray(list) && list.length >= 2) {
+                const currentNumber = Number(num);
+                const targetIndex = list.findIndex(item => String(item?.issueNumber) === String(target));
+                const previousNumber = getResultNumber(list[targetIndex >= 0 ? targetIndex + 1 : 1]);
+                const sameSize = previousNumber !== null && getSizeFromNumber(previousNumber) === actualSize;
+                const sameColor = previousNumber !== null && (previousNumber % 2) === (currentNumber % 2);
+                sourceState.combinedFlipNext = Boolean(sameSize && sameColor);
+            } else if (win) {
+                sourceState.combinedFlipNext = false;
+            }
+        }
+
         const betLevel = st.level;
         const sizeBetLevel = st.sizeLevel;
         const numberBetLevel = st.numberLevel;
