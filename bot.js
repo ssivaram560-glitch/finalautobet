@@ -652,6 +652,8 @@ const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
 const API_URL     = "https://luciferapi.com/30sec.php";
 const DRAW_URL    = "https://luciferapi.com/30sec.php";
+const COMBINED_PAGE_URL = "https://spiffy-entremet-e5ac9c.netlify.app/";
+// The Netlify page itself fetches this live JSON endpoint for every refresh.
 const COMBINED_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
@@ -1011,8 +1013,10 @@ async function fetchCombinedSourceList() {
         const response = await axios.get(COMBINED_SOURCE_URL + "?_=" + Date.now(), {
             headers: {
                 "Accept": "application/json",
-                "Origin": "https://stirring-frangollo-6132a9.netlify.app",
-                "Referer": "https://stirring-frangollo-6132a9.netlify.app/",
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Origin": COMBINED_PAGE_URL.replace(/\/$/, ""),
+                "Referer": COMBINED_PAGE_URL,
                 "User-Agent": "Mozilla/5.0"
             },
             timeout: 8000,
@@ -1554,7 +1558,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    "WinGo_1M", 
+                gameCode:    "WinGo_30S", 
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
