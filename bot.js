@@ -639,7 +639,7 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
 //  CONFIG
 // ============================================================
 // Keep secrets outside the source code.
-const BOT_TOKEN    = process.env.BOT_TOKEN || "8687914335:AAFmAN__B884yE1K6a8WnitedGS-IYBAD08";
+const BOT_TOKEN    = process.env.BOT_TOKEN || "8670635800:AAEeDoWmav3IL5Pj19shmaSfTHNuLjaT9Lw";
 const OWNER_ID     = 8869874751;
 const OWNER_PASS   = process.env.OWNER_PASS || "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
@@ -1030,6 +1030,11 @@ async function fetchCombinedSourceList() {
         console.error('[COMBINED SOURCE ERROR]', error?.message || error);
         return null;
     }
+}
+
+function getCombinedStrategySize(n) {
+    const mapping = ['BIG', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG'];
+    return mapping[Number(n)] || null;
 }
 
 function getCombinedSourcePrediction(list, userId) {
@@ -1549,7 +1554,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    "WinGo_30S", 
+                gameCode:    "WinGo_1M", 
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
@@ -2606,20 +2611,41 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         const win = settlement ? settlement.won : evaluationBets.some(b => b.type === "NUMBER"
             ? Number(b.val) === num
             : b.type === "SIZE" && b.val === actualSize);
-        // Match the supplied page's COMBINED recovery behavior: only after a
-        // loss, if previous + current actual share both color and size, flip
-        // the next source prediction. Keep only one boolean per user.
+        // Exact flip rules from the new Netlify page. Apply only after LOSS.
         if (cfg.mode === "COMBINED") {
             const sourceState = userStates[String(userId)] || (userStates[String(userId)] = {});
-            if (!win && Array.isArray(list) && list.length >= 2) {
-                const currentNumber = Number(num);
-                const targetIndex = list.findIndex(item => String(item?.issueNumber) === String(target));
-                const previousNumber = getResultNumber(list[targetIndex >= 0 ? targetIndex + 1 : 1]);
-                const sameSize = previousNumber !== null && getSizeFromNumber(previousNumber) === actualSize;
-                const sameColor = previousNumber !== null && (previousNumber % 2) === (currentNumber % 2);
-                sourceState.combinedFlipNext = Boolean(sameSize && sameColor);
-            } else if (win) {
-                sourceState.combinedFlipNext = false;
+            sourceState.combinedFlipNext = false;
+            if (!win && Array.isArray(list)) {
+                const currentIndex = list.findIndex(item => String(item?.issueNumber) === String(target));
+                const current = list[currentIndex >= 0 ? currentIndex : 0];
+                const previous = list[currentIndex >= 0 ? currentIndex + 1 : 1];
+                const beforePrevious = list[currentIndex >= 0 ? currentIndex + 2 : 2];
+                const currentNumber = getResultNumber(current);
+                const previousNumber = getResultNumber(previous);
+                const beforePreviousNumber = getResultNumber(beforePrevious);
+
+                const color = n => Number(n) % 2 === 0 ? 'RED' : 'GREEN';
+                const samePair = (a, b) => a !== null && b !== null &&
+                    color(a) === color(b) && getCombinedStrategySize(a) === getCombinedStrategySize(b);
+
+                if (currentNumber !== null && previousNumber !== null && beforePreviousNumber !== null) {
+                    const sameColor3 = color(currentNumber) === color(previousNumber) &&
+                        color(previousNumber) === color(beforePreviousNumber);
+                    const sameStrategySize3 = getCombinedStrategySize(currentNumber) ===
+                        getCombinedStrategySize(previousNumber) &&
+                        getCombinedStrategySize(previousNumber) === getCombinedStrategySize(beforePreviousNumber);
+                    const mixedSize3 = !sameStrategySize3;
+
+                    if (sameColor3 && sameStrategySize3) {
+                        sourceState.combinedFlipNext = true;
+                    } else if (sameColor3 && mixedSize3) {
+                        sourceState.combinedFlipNext = false;
+                    } else {
+                        sourceState.combinedFlipNext = samePair(currentNumber, previousNumber);
+                    }
+                } else if (currentNumber !== null && previousNumber !== null) {
+                    sourceState.combinedFlipNext = samePair(currentNumber, previousNumber);
+                }
             }
         }
 
