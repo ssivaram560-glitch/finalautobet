@@ -570,7 +570,7 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
         console.log('[LOGIN] Navigating to WinGo 1M page to trigger GetBalance request...');
         console.log('[LOGIN] Navigating directly to WinGo 1M page via URL...');
         try {
-            await page.goto(SITE_URL + '/WinGo/WinGo_1M', {
+            await page.goto(SITE_URL + '/WinGo/WinGo_30S', {
                 waitUntil: 'domcontentloaded',
                 timeout: 30000
             });
@@ -639,7 +639,7 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
 //  CONFIG
 // ============================================================
 // Keep secrets outside the source code.
-const BOT_TOKEN    = process.env.BOT_TOKEN || "8871633438:AAEX-aqEKqXK50Qh7O0SnNq45C3aSatKBAA";
+const BOT_TOKEN    = process.env.BOT_TOKEN || "8687914335:AAFmAN__B884yE1K6a8WnitedGS-IYBAD08";
 const OWNER_ID     = 8869874751;
 const OWNER_PASS   = process.env.OWNER_PASS || "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
@@ -650,20 +650,19 @@ const LOSS_STICKER = "CAACAgUAAxkBAAFHUGVp4JX-BE2TRkhIKTwcjkwW-gzdPAACthoAAoG8YV
 const BET_URL     = "https://api.ar-lottery01.com/api/Lottery/WinGoBet";
 const LOGIN_URL   = "https://api.tashanrfv.com/api/webapi/Login";
 const CAPTCHA_URL = "https://13llottery.com/api/Home/Captcha";
-const API_URL     = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json";
-const DRAW_URL    = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json";
+const API_URL     = "https://luciferapi.com/30sec.php";
+const DRAW_URL    = "https://luciferapi.com/30sec.php";
 // Lucifer currently exposes the verified legacy history endpoint as 30sec.php;
 // no working 1min.php/1m.php endpoint was found, so it is used only as a
 // secondary historical cross-check, never as the primary 1M result source.
-const LUCIFER_OLD_1M_ANALYSIS_URLS = [
-    "https://luciferapi.com/1min.php",
-    "https://luciferapi.com/1m.php",
-    "https://luciferapi.com/60sec.php",
-    "https://luciferapi.com/30sec.php"
-];
-const COMBINED_PAGE_URL = "https://spiffy-entremet-e5ac9c.netlify.app/";
-// The Netlify page itself fetches this live JSON endpoint for every refresh.
-const COMBINED_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+const LUCIFER_OLD_ANALYSIS_URL = "https://luciferapi.com/30sec.php";
+const COMBINED_PAGE_URL = "https://endearing-bavarois-067272.netlify.app/";
+// BigSmall+Number uses the requested one-minute draw source.
+const COMBINED_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json";
+// Lucifer root returns the complete historical dataset used for shared number ranking.
+const LUCIFER_FULL_HISTORY_URL = "https://luciferapi.com/";
+// The supplied Netlify page uses this live 30-second draw source for SIZE.
+const NETLIFY_SIZE_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
 const CHROME_ARGS = [
@@ -1037,11 +1036,62 @@ async function fetchCombinedSourceList() {
         return raw.slice(0, 25).map(item => ({
             issueNumber: String(item?.issueNumber ?? ''),
             number: String(item?.number ?? '').replace(/\D/g, '').slice(-1),
-            color: String(item?.color ?? '')
+            color: String(item?.color ?? ''),
+            size: String(item?.size ?? '')
         })).filter(item => /^\d+$/.test(item.issueNumber) && /^[0-9]$/.test(item.number));
     } catch (error) {
         console.error('[COMBINED SOURCE ERROR]', error?.message || error);
         return null;
+    }
+}
+
+async function fetchNetlifySizeList() {
+    try {
+        const response = await axios.get(NETLIFY_SIZE_SOURCE_URL + '?_=' + Date.now(), {
+            headers: {
+                'Accept': 'application/json',
+                'Cache-Control': 'no-cache, no-store, max-age=0',
+                'Pragma': 'no-cache',
+                'Origin': COMBINED_PAGE_URL.replace(/\/$/, ''),
+                'Referer': COMBINED_PAGE_URL,
+                'User-Agent': 'Mozilla/5.0'
+            },
+            timeout: 10000,
+            maxContentLength: 512 * 1024,
+            maxBodyLength: 512 * 1024,
+            validateStatus: status => status >= 200 && status < 300
+        });
+        const raw = Array.isArray(response.data?.data?.list) ? response.data.data.list : [];
+        return raw.map(item => ({
+            issueNumber: String(item?.issueNumber ?? ''),
+            number: String(item?.number ?? '').replace(/\D/g, '').slice(-1),
+            color: String(item?.color ?? '')
+        })).filter(item => /^\d+$/.test(item.issueNumber) && /^[0-9]$/.test(item.number));
+    } catch (error) {
+        console.error('[NETLIFY SIZE SOURCE ERROR]', error?.message || error);
+        return null;
+    }
+}
+
+async function fetchLuciferFullHistory() {
+    try {
+        const response = await axios.get(LUCIFER_FULL_HISTORY_URL + '?_=' + Date.now(), {
+            headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache', 'User-Agent': 'Mozilla/5.0' },
+            timeout: 12000,
+            maxContentLength: 16 * 1024 * 1024,
+            maxBodyLength: 16 * 1024 * 1024,
+            validateStatus: status => status >= 200 && status < 300
+        });
+        const raw = Array.isArray(response.data?.data) ? response.data.data : [];
+        return raw.map(item => ({
+            issueNumber: String(item?.issueNumber ?? item?.issue ?? ''),
+            number: Number.parseInt(String(item?.number ?? '').replace(/\D/g, '').slice(-1), 10),
+            size: String(item?.size ?? '').toUpperCase(),
+            color: String(item?.color ?? '').split(',')[0].toUpperCase()
+        })).filter(item => /^\d+$/.test(item.issueNumber) && Number.isInteger(item.number) && item.number >= 0 && item.number <= 9);
+    } catch (error) {
+        console.error('[LUCIFER FULL HISTORY ERROR]', error?.message || error);
+        return [];
     }
 }
 
@@ -1050,75 +1100,412 @@ function getCombinedStrategySize(n) {
     return mapping[Number(n)] || null;
 }
 
-function getCombinedSourcePrediction(list, userId) {
+async function getCombinedSourcePrediction(list, userId) {
     const latest = Array.isArray(list) && list[0];
     const n = Number.parseInt(String(latest?.number ?? ''), 10);
     if (!latest || !Number.isInteger(n) || n < 0 || n > 9) {
-        return { skip: true, reason: 'Combined source returned no valid latest result' };
+        return { skip: true, reason: 'One-minute source returned no valid latest result' };
     }
 
-    // Exact mapping observed in the supplied Netlify page:
-    // 9/5/1/0 -> BIG 4; 8/7/6/4/3/2 -> SMALL 5.
+    // Exact SIZE mapping observed in the supplied Netlify page.
     const mapping = ['BIG', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG'];
-    let size = mapping[n];
-    let number = size === 'BIG' ? 4 : 5;
-    const state = userStates[String(userId)] || {};
-    const mode = state.combinedFlipNext === true ? 'FLIP' : 'DIRECT';
-    if (mode === 'FLIP') {
-        size = size === 'BIG' ? 'SMALL' : 'BIG';
-        number = size === 'BIG' ? 4 : 5;
+    const size = mapping[n];
+    const oppositePool = size === 'BIG' ? [0, 1, 2, 3, 4] : [5, 6, 7, 8, 9];
+    const cacheKey = `${String(latest.issueNumber ?? latest.issue)}:${n}:${size}`;
+    if (getCombinedSourcePrediction._cache?.key === cacheKey) {
+        return getCombinedSourcePrediction._cache.signal;
+    }
+    const fullHistory = await fetchLuciferFullHistory();
+    if (fullHistory.length < 2) {
+        return { skip: true, reason: 'Lucifer full history unavailable for shared number selection' };
     }
 
-    return {
+    const currentSize = String(latest?.size || getSizeFromNumber(n)).toUpperCase();
+    const currentColor = String(latest?.color || '').split(',')[0].toUpperCase();
+    const netlifySizeForNumber = number => mapping[Number(number)];
+    const poolForNumber = number => netlifySizeForNumber(number) === 'BIG'
+        ? [0, 1, 2, 3, 4] : [5, 6, 7, 8, 9];
+    const contextMatches = (row, rule, targetSize, targetColor) => {
+        if (rule === 'EXACT-SIZE-COLOR') return row.size === targetSize && row.color === targetColor;
+        if (rule === 'SIZE-ONLY') return row.size === targetSize;
+        if (rule === 'COLOR-ONLY') return row.color === targetColor;
+        return true;
+    };
+    const findNearestPrediction = (index, rule) => {
+        const target = fullHistory[index];
+        const pool = poolForNumber(target.number);
+        // Keep one record between the target and its historical match so the
+        // target itself can never be counted as the match's future outcome.
+        for (let olderIndex = index + 2; olderIndex < fullHistory.length; olderIndex++) {
+            const older = fullHistory[olderIndex];
+            const following = fullHistory[olderIndex - 1];
+            if (!following || !pool.includes(following.number)) continue;
+            if (contextMatches(older, rule, target.size, target.color)) return following.number;
+        }
+        return null;
+    };
+
+    // Lightweight online ML candidate. It learns a multiclass score for each
+    // number from period/result/size/colour features, then is evaluated in
+    // chronological walk-forward order before being allowed to win selection.
+    const mlFeatures = row => {
+        const digits = String(row.issueNumber || '').replace(/\D/g, '');
+        return [
+            1,
+            (Number.parseInt(digits.slice(-3), 10) || 0) / 999,
+            (Number.parseInt(digits.slice(-1), 10) || 0) / 9,
+            row.number / 9,
+            row.size === 'BIG' ? 1 : -1,
+            row.color === 'RED' ? 1 : -1
+        ];
+    };
+    const dot = (weights, features) => weights.reduce((sum, value, i) => sum + value * features[i], 0);
+    const mlWeights = Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => [n, [0, 0, 0, 0, 0, 0]]));
+    let mlTested = 0;
+    let mlHits = 0;
+    for (let index = fullHistory.length - 1; index >= 2; index--) {
+        const target = fullHistory[index];
+        const actual = fullHistory[index - 1]?.number;
+        const pool = poolForNumber(target.number);
+        if (!pool.includes(actual)) continue;
+        const features = mlFeatures(target);
+        const predicted = pool.slice().sort((a, b) => dot(mlWeights[b], features) - dot(mlWeights[a], features) || a - b)[0];
+        mlTested++;
+        if (predicted === actual) mlHits++;
+        if (predicted !== actual) {
+            for (let i = 0; i < features.length; i++) {
+                mlWeights[actual][i] += features[i];
+                mlWeights[predicted][i] -= features[i];
+            }
+        }
+    }
+    const currentFeatures = mlFeatures({
+        issueNumber: latest.issueNumber ?? latest.issue,
+        number: n,
+        size: currentSize,
+        color: currentColor
+    });
+    const mlNumber = oppositePool.slice().sort((a, b) =>
+        dot(mlWeights[b], currentFeatures) - dot(mlWeights[a], currentFeatures) || a - b
+    )[0];
+
+    // Select the rule that performed best in a walk-forward test. This avoids
+    // choosing a number merely because it appeared most often overall.
+    const rules = ['EXACT-SIZE-COLOR', 'SIZE-ONLY', 'COLOR-ONLY', 'RECENT-POOL'];
+    const reports = rules.map(rule => {
+        let tested = 0;
+        let hits = 0;
+        const limit = Math.min(fullHistory.length - 1, 401);
+        for (let index = 1; index < limit; index++) {
+            const predicted = rule === 'RECENT-POOL'
+                ? findNearestPrediction(index, 'RECENT-POOL')
+                : findNearestPrediction(index, rule);
+            if (predicted === null) continue;
+            tested++;
+            if (predicted === fullHistory[index - 1].number) hits++;
+        }
+        return { rule, tested, hits, rate: tested ? hits / tested : 0 };
+    });
+    reports.push({ rule: 'ML-PERCEPTRON', tested: mlTested, hits: mlHits, rate: mlTested ? mlHits / mlTested : 0, mlNumber });
+    reports.sort((a, b) => b.rate - a.rate || b.tested - a.tested || a.rule.localeCompare(b.rule));
+
+    const selectedRule = reports[0];
+    const selectedNumber = selectedRule?.rule === 'ML-PERCEPTRON'
+        ? selectedRule.mlNumber
+        : selectedRule?.rule === 'RECENT-POOL'
+        ? findNearestPrediction(0, 'RECENT-POOL')
+        : findNearestPrediction(0, selectedRule?.rule || 'EXACT-SIZE-COLOR');
+    const number = selectedNumber ?? oppositePool[0];
+    const confidence = selectedRule?.tested ? Math.round(selectedRule.rate * 100) : 0;
+
+    const signal = {
         type: 'COMBINED',
         val: size,
         number,
-        mode,
-        pat: mode,
-        pattern: `SOURCE-${n}`,
-        decisionReason: `Netlify source mapping for last result ${n}${mode === 'FLIP' ? ' + loss flip' : ''}`,
+        mode: 'NETLIFY-SIZE+LUCIFER-NUMBER',
+        pat: 'SHARED-HISTORY',
+        pattern: `SOURCE-SIZE-${size}-OPPOSITE-POOL`,
+        numberConfidence: confidence,
+        decisionReason:
+            `Netlify size for ${n}: ${size}; pool ${oppositePool.join(',')} | ` +
+            `Lucifer context ${currentSize || 'SIZE'}+${currentColor || 'COLOR'} | ` +
+            `rule ${selectedRule?.rule || 'FALLBACK'} walk-forward ${selectedRule?.hits || 0}/${selectedRule?.tested || 0} | ` +
+            `selected ${number}`,
         bets: [
             { type: 'SIZE', val: size, kind: 'size' },
             { type: 'NUMBER', val: number, kind: 'number' }
         ]
     };
+    getCombinedSourcePrediction._cache = { key: cacheKey, signal };
+    return signal;
 }
 
 async function fetchLuciferOldHistoryForAnalysis() {
-    for (const url of LUCIFER_OLD_1M_ANALYSIS_URLS) {
-        try {
-            const response = await axios.get(url + "?_=" + Date.now(), {
-                headers: { "Accept": "application/json", "Cache-Control": "no-cache, no-store", "Pragma": "no-cache" },
-                timeout: 6000,
-                maxContentLength: 512 * 1024,
-                maxBodyLength: 512 * 1024,
-                validateStatus: status => status >= 200 && status < 300
-            });
-            const raw = Array.isArray(response.data?.data?.list) ? response.data.data.list
-                : Array.isArray(response.data?.data) ? response.data.data : [];
-            const normalized = raw.slice(0, 200).map((item, index) => ({
-                issueNumber: String(item?.issueNumber ?? item?.issue ?? index),
-                number: String(item?.number ?? item?.result ?? item?.winNumber ?? '').replace(/\D/g, '').slice(-1)
-            })).filter(item => /^\d+$/.test(item.issueNumber) && /^[0-9]$/.test(item.number));
-            if (normalized.length >= 5) {
-                console.log(`[LUCIFER HISTORY] ${url} -> ${normalized.length} records`);
-                return normalized;
-            }
-        } catch (error) {
-            console.warn(`[LUCIFER HISTORY] ${url} unavailable: ${error?.message || error}`);
-        }
+    try {
+        const response = await axios.get(LUCIFER_OLD_ANALYSIS_URL + "?_=" + Date.now(), {
+            headers: { "Accept": "application/json", "Cache-Control": "no-cache, no-store", "Pragma": "no-cache" },
+            timeout: 8000,
+            maxContentLength: 512 * 1024,
+            maxBodyLength: 512 * 1024,
+            validateStatus: status => status >= 200 && status < 300
+        });
+        const raw = Array.isArray(response.data)
+            ? response.data
+            : Array.isArray(response.data?.data)
+                ? response.data.data
+                : Array.isArray(response.data?.data?.list)
+                    ? response.data.data.list
+                    : [];
+        // Use the complete history returned by Lucifer; do not cap it at 200.
+        return raw.map((item, index) => ({
+            issueNumber: String(item?.issueNumber ?? item?.issue ?? item?.period ?? index),
+            number: String(
+                item?.number ?? item?.winNumber ?? item?.result ?? item?.resultNumber ?? ''
+            ).replace(/\D/g, '').slice(-1)
+        })).filter(item => /^[0-9]$/.test(item.number));
+    } catch (error) {
+        console.error('[LUCIFER OLD HISTORY ERROR]', error?.message || error);
+        return [];
     }
-    return [];
+}
+
+// History is newest-first. Each older record at index i is followed by the
+// newer record at index i - 1. Compare several historical rules and choose
+// the strongest measured next-size edge for the current period.
+function analyzeLuciferNextResult(historyList, currentResult, currentPeriod, state) {
+    const current = Number(currentResult);
+    if (!Number.isInteger(current) || current < 0 || current > 9) return null;
+
+    const history = (Array.isArray(historyList) ? historyList : [])
+        .map((item, index) => ({
+            number: getResultNumber(item),
+            issue: String(item?.issueNumber ?? item?.issue ?? item?.period ?? index)
+        }))
+        .filter(item => item.number !== null);
+
+    const periodText = String(currentPeriod ?? '');
+    const periodLast = periodText.replace(/\D/g, '').slice(-1);
+    const periodSecondLast = periodText.replace(/\D/g, '').slice(-2);
+
+    const rules = [
+        {
+            name: `RESULT-${current}`,
+            match: item => item.number === current
+        },
+        {
+            name: `PERIOD-LAST-${periodLast || '?'}`,
+            match: item => periodLast && item.issue.replace(/\D/g, '').slice(-1) === periodLast
+        },
+        {
+            name: `PERIOD-LAST2-${periodSecondLast || '?'}`,
+            match: periodSecondLast && item.issue.replace(/\D/g, '').slice(-2) === periodSecondLast
+        },
+        {
+            name: `RESULT-${current}+PERIOD-${periodLast || '?'}`,
+            match: item => item.number === current && periodLast &&
+                item.issue.replace(/\D/g, '').slice(-1) === periodLast
+        }
+    ].filter(rule => rule.name.indexOf('?') === -1);
+
+    const candidates = [];
+    for (const rule of rules) {
+        const sizeCounts = { BIG: 0, SMALL: 0 };
+        const numberCounts = Array(10).fill(0);
+        let samples = 0;
+
+        for (let index = 1; index < history.length; index++) {
+            if (!rule.match(history[index])) continue;
+            const following = history[index - 1]?.number;
+            if (following === null || following === undefined) continue;
+            numberCounts[following]++;
+            sizeCounts[getSizeFromNumber(following)]++;
+            samples++;
+        }
+
+        if (samples < 8) continue;
+        const rankedSizes = Object.entries(sizeCounts)
+            .map(([size, count]) => ({ size, count }))
+            .sort((a, b) => b.count - a.count);
+        const bestSize = rankedSizes[0];
+        const secondSize = rankedSizes[1];
+        if (!bestSize || !secondSize || bestSize.count < 2) continue;
+
+        const confidence = Math.round((bestSize.count / samples) * 100);
+        const edge = (bestSize.count - secondSize.count) / samples;
+        candidates.push({ rule, bestSize, confidence, edge, samples, numberCounts });
+    }
+
+    if (!candidates.length) return null;
+    candidates.sort((a, b) =>
+        b.confidence - a.confidence || b.edge - a.edge || b.samples - a.samples
+    );
+
+    const selected = candidates[0];
+    if (selected.confidence < 90 || selected.edge < 0.15) return null;
+
+    const representativeNumber = selected.numberCounts
+        .map((count, number) => ({ number, count }))
+        .filter(item => getSizeFromNumber(item.number) === selected.bestSize.size)
+        .sort((a, b) => b.count - a.count || a.number - b.number)[0]?.number ?? null;
+
+    const predictionSize = selected.bestSize.size;
+    const predictionColor = predictionSize === 'BIG' ? 'RED' : 'GREEN';
+    // Under the requested 0–4/5–9 mapping, colour and size describe the
+    // same event. Use SIZE as the deterministic tie-breaker for this period.
+    const mode = 'SIZE';
+
+    return {
+        type: mode === 'COLOUR' ? 'COLOR' : 'SIZE',
+        val: mode === 'COLOUR' ? predictionColor : predictionSize,
+        number: representativeNumber,
+        conf: selected.confidence,
+        historyBased: true,
+        pat: 'LUCIFER-PATTERN',
+        mode,
+        pattern: selected.rule.name,
+        decisionReason:
+            `${selected.rule.name}: ${predictionSize} ` +
+            `(${selected.bestSize.count}/${selected.samples}, ${selected.confidence}%) | ` +
+            `representative ${representativeNumber} | ${predictionColor}`,
+        bets: [{
+            type: mode === 'COLOUR' ? 'COLOR' : 'SIZE',
+            val: mode === 'COLOUR' ? predictionColor : predictionSize,
+            kind: mode === 'COLOUR' ? 'color' : 'size'
+        }]
+    };
+}
+
+function calculateHistoryDigit(issueNumber, resultNumber) {
+    const period = String(issueNumber ?? '');
+    const result = Number(resultNumber);
+    if (!/^\d+$/.test(period) || !Number.isInteger(result) || result < 0 || result > 9) return null;
+    let nextPeriod;
+    try {
+        nextPeriod = (BigInt(period) + 1n).toString();
+    } catch (_) {
+        return null;
+    }
+    const nextLast3 = Number.parseInt(nextPeriod.slice(-3), 10);
+    const answer = nextLast3 * Math.exp(result);
+    const digits = String(answer).replace('.', '').substring(0, 14);
+    const digit = Number.parseInt(digits.charAt(digits.length - 1), 10);
+    return Number.isInteger(digit) && digit >= 0 && digit <= 9 ? digit : null;
+}
+
+function getHistoricalColor(number) {
+    const n = Number(number);
+    if (!Number.isInteger(n) || n < 0 || n > 9) return null;
+    // Base colour used by the game: 0 is RED+VIOLET and 5 is GREEN+VIOLET.
+    return n % 2 === 0 ? 'RED' : 'GREEN';
+}
+
+function analyzeCalculatedResultMode(historyList, currentPeriod, currentResult) {
+    const currentDigit = calculateHistoryDigit(currentPeriod, currentResult);
+    if (currentDigit === null) return null;
+
+    const rows = (Array.isArray(historyList) ? historyList : [])
+        .map((item, index) => ({
+            issue: String(item?.issueNumber ?? item?.issue ?? item?.period ?? index),
+            result: getResultNumber(item)
+        }))
+        .filter(row => row.result !== null);
+
+    const stats = Array.from({ length: 10 }, () => ({
+        samples: 0,
+        size: { BIG: 0, SMALL: 0 },
+        color: { RED: 0, GREEN: 0 },
+        numbers: Array(10).fill(0)
+    }));
+
+    for (let index = 1; index < rows.length; index++) {
+        const calculatedDigit = calculateHistoryDigit(rows[index].issue, rows[index].result);
+        const actualNext = rows[index - 1].result;
+        if (calculatedDigit === null || actualNext === null) continue;
+
+        const bucket = stats[calculatedDigit];
+        bucket.samples++;
+        bucket.size[getSizeFromNumber(actualNext)]++;
+        bucket.color[getHistoricalColor(actualNext)]++;
+        bucket.numbers[actualNext]++;
+    }
+
+    const bucket = stats[currentDigit];
+    if (!bucket || bucket.samples < 8) return null;
+
+    const candidates = [
+        { type: 'SIZE', values: bucket.size },
+        { type: 'COLOR', values: bucket.color }
+    ].flatMap(candidate => Object.entries(candidate.values).map(([value, wins]) => ({
+        type: candidate.type,
+        value,
+        wins,
+        samples: bucket.samples,
+        confidence: Math.round((wins / bucket.samples) * 100),
+        losses: bucket.samples - wins
+    }))).sort((a, b) => b.confidence - a.confidence || b.wins - a.wins);
+
+    const best = candidates[0];
+    const alternate = candidates.find(item => item.type === best.type && item.value !== best.value);
+    if (!best || !alternate || best.confidence < 90 || best.confidence - alternate.confidence < 15) {
+        return null;
+    }
+
+    const representativeNumber = bucket.numbers
+        .map((count, number) => ({ number, count }))
+        .filter(item => best.type === 'SIZE'
+            ? getSizeFromNumber(item.number) === best.value
+            : getHistoricalColor(item.number) === best.value)
+        .sort((a, b) => b.count - a.count || a.number - b.number)[0]?.number ?? null;
+
+    return {
+        type: best.type,
+        val: best.value,
+        number: representativeNumber,
+        conf: best.confidence,
+        historyBased: true,
+        pat: 'CALC-RESULT-HISTORY',
+        mode: best.type === 'COLOR' ? 'COLOUR' : 'SIZE',
+        pattern: `CALC-${currentDigit}`,
+        decisionReason:
+            `Calculation result ${currentDigit}: ${best.type} ${best.value} ` +
+            `won ${best.wins}/${best.samples} (${best.confidence}%) | ` +
+            `representative ${representativeNumber}`,
+        bets: [{
+            type: best.type,
+            val: best.value,
+            kind: best.type === 'COLOR' ? 'color' : 'size'
+        }]
+    };
+}
+
+// Fallback copied from the supplied APK analysis. This is random UI output,
+// not a historical prediction, so it is never eligible for AutoBet.
+function generateRandomBigSmallFallback(period) {
+    const n = Math.floor(Math.random() * 10);
+    const size = n <= 4 ? 'SMALL' : 'BIG';
+    return {
+        type: 'SIZE',
+        val: size,
+        number: n,
+        conf: 0,
+        fallback: true,
+        historyBased: false,
+        pat: 'RANDOM-FALLBACK',
+        mode: 'SIZE',
+        pattern: 'RANDOM-0-9',
+        decisionReason: `APK fallback: random ${n} -> ${size} for period ${period}`,
+        bets: [{ type: 'SIZE', val: size, kind: 'size' }]
+    };
 }
 
 async function fetchListForUser(userId) {
     const mode = String(autobetCfg[userId]?.mode || '').toUpperCase();
     if (mode === 'COMBINED') return await fetchCombinedSourceList();
-    // Primary current-period source is always the official 1-minute feed.
-    const primary = await fetchList();
-    if (primary) primary._oldAnalysis = await fetchLuciferOldHistoryForAnalysis();
-    return primary;
+    if (mode === 'SIZE') return await fetchNetlifySizeList();
+    // NUMBER mode keeps the existing source.
+    return await fetchList();
 }
+
 // Helper parser function
 async function parseBalanceResponse(r) {
     if (r.data && r.data.code === 0 && r.data.data && typeof r.data.data.balance !== 'undefined') {
@@ -1596,7 +1983,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    "WinGo_1M", 
+                gameCode:    cfg.mode === "COMBINED" ? "WinGo_1M" : "WinGo_30S",
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
@@ -2167,7 +2554,7 @@ function calculatePastedRecoveryPrediction(list, currentResult) {
     if (!Number.isInteger(lastDigit)) return null;
 
     return {
-        prediction: lastDigit <= 4 ? 'SMALL' : 'BIG',
+        prediction: lastDigit >= 5 ? 'BIG' : 'SMALL',
         lastDigit,
         nextLast3Num,
         reason: `${nextLast3Num} × exp(${currentResult}) -> ${lastDigit}`
@@ -2224,7 +2611,7 @@ function getBigSmallPatternPrediction(list) {
 }
 
 function analyzeSameOppositeHistory(historyList, fallbackPattern) {
-    const sizes = (Array.isArray(historyList) ? historyList : []).slice(0, 200).map(item => {
+    const sizes = (Array.isArray(historyList) ? historyList : []).map(item => {
         const n = getResultNumber(item);
         return n === null ? null : getSizeFromNumber(n);
     }).filter(Boolean);
@@ -2287,120 +2674,82 @@ function analyzeSameOppositeHistory(historyList, fallbackPattern) {
     };
 }
 
-function calculateHistoryDigit(item) {
-    const period = String(item?.issueNumber ?? item?.issue ?? '');
-    const current = getResultNumber(item);
-    if (!/^\d+$/.test(period) || current === null || current === 0) return null;
-    try {
-        const nextPeriod = (BigInt(period) + 1n).toString();
-        const last3 = Number.parseInt(nextPeriod.slice(-3), 10);
-        const digits = String(last3 * Math.exp(current)).replace('.', '').substring(0, 14);
-        const digit = Number.parseInt(digits.charAt(digits.length - 1), 10);
-        return Number.isInteger(digit) ? digit : null;
-    } catch (_) { return null; }
-}
-
-function analyzeCalculationDigitHistory(historyList) {
-    const table = Array.from({ length: 10 }, () => ({
-        total: 0,
-        size: { BIG: 0, SMALL: 0 },
-        color: { RED: 0, GREEN: 0 },
-        observations: []
-    }));
-    const list = Array.isArray(historyList) ? historyList : [];
-    // Newest first: calculate each old record and compare it with the next
-    // actual period. This builds a digit-conditioned outcome pattern table.
-    for (let i = 1; i < list.length; i++) {
-        const digit = calculateHistoryDigit(list[i]);
-        const nextNumber = getResultNumber(list[i - 1]);
-        if (digit === null || nextNumber === null) continue;
-        const row = table[digit];
-        const size = nextNumber >= 5 ? 'BIG' : 'SMALL';
-        const color = nextNumber % 2 === 0 ? 'RED' : 'GREEN';
-        row.total++;
-        row.size[size]++;
-        row.color[color]++;
-        row.observations.unshift({ size, color, number: nextNumber });
-        if (row.observations.length > 200) row.observations.pop();
-    }
-    return table;
-}
-
-function weightedOutcomeRate(row, domain, value) {
-    const observations = Array.isArray(row?.observations) ? row.observations : [];
-    if (!observations.length) return 0;
-    const recent = observations.slice(0, 20);
-    const allWins = observations.filter(o => o[domain] === value).length;
-    const recentWins = recent.filter(o => o[domain] === value).length;
-    const allRate = allWins / observations.length;
-    const recentRate = recentWins / recent.length;
-    return 0.60 * recentRate + 0.40 * allRate;
-}
-
-function chooseHistoricalPrediction(digit, table) {
-    const row = table?.[digit];
-    if (!row || row.total < 3) return null;
-    // Compare all four outcomes together. The highest historical score wins,
-    // regardless of whether it is a SIZE or COLOUR outcome.
-    const candidates = ['SMALL', 'BIG', 'RED', 'GREEN'].map(value => {
-        const domain = (value === 'SMALL' || value === 'BIG') ? 'size' : 'color';
-        return {
-            value,
-            type: domain === 'size' ? 'SIZE' : 'COLOR',
-            score: weightedOutcomeRate(row, domain, value),
-            wins: row[domain][value],
-            total: row.total
-        };
-    }).sort((a, b) => b.score - a.score);
-    const selected = candidates[0];
-    const second = candidates[1];
-    return {
-        value: selected.value,
-        type: selected.type,
-        wins: selected.wins,
-        total: selected.total,
-        rate: Math.round(selected.score * 100),
-        score: selected.score,
-        margin: Math.round((selected.score - second.score) * 100),
-        pattern: `SIZE SMALL:${row.size.SMALL} BIG:${row.size.BIG} | COLOR RED:${row.color.RED} GREEN:${row.color.GREEN}`,
-        ranking: candidates.map(c => `${c.value}:${Math.round(c.score * 100)}%`).join(' > ')
-    };
-}
-
 function calculatePastedModePrediction(list, state) {
     if (!Array.isArray(list) || !list[0]) return null;
     const currentPeriod = String(list[0].issueNumber ?? list[0].issue ?? '');
     const currentResult = getResultNumber(list[0]);
     if (!/^\d+$/.test(currentPeriod) || currentResult === null || currentResult === 0) return null;
-    const digit = calculateHistoryDigit(list[0]);
-    if (digit === null) return null;
-    const historical = chooseHistoricalPrediction(digit, state.calculationHistoryTable);
-    if (!historical) return null;
-    const nextPeriodNum = BigInt(currentPeriod) + 1n;
-    const nextLast3 = Number.parseInt(nextPeriodNum.toString().slice(-3), 10);
-    const label = historical.type === 'COLOR' ? 'COLOUR' : 'SIZE';
+
+    let nextPeriod;
+    try { nextPeriod = (BigInt(currentPeriod) + 1n).toString(); } catch (_) { return null; }
+    const nextLast3Num = Number.parseInt(nextPeriod.slice(-3), 10);
+    const answer = nextLast3Num * Math.exp(currentResult);
+    const digits = String(answer).replace('.', '').substring(0, 14);
+    const lastDigit = Number.parseInt(digits.charAt(digits.length - 1), 10);
+    if (!Number.isInteger(lastDigit)) return null;
+
+    if (state.mode === 'RECOVERY') {
+        const color = getActualColorBase(lastDigit);
+        return {
+            type: 'COLOR', val: color, conf: 90, pat: 'COLOUR', mode: 'COLOUR',
+            pattern: `CALC-${lastDigit}`, lastDigit,
+            decisionReason: `${nextLast3Num} × exp(${currentResult}) -> ${lastDigit} | RECOVERY COLOUR`,
+            bets: [{ type: 'COLOR', val: color, kind: 'color' }]
+        };
+    }
+
+    const size = lastDigit >= 5 ? 'BIG' : 'SMALL';
     return {
-        type: historical.type,
-        val: historical.value,
-        conf: historical.rate,
-        pat: label,
-        mode: label,
-        pattern: `CALC-${digit}`,
-        lastDigit: digit,
-        decisionReason: `${nextLast3} × exp(${currentResult}) -> ${digit} | ${historical.pattern} | Ranking ${historical.ranking} | Selected ${historical.value} ${historical.wins}/${historical.total} (${historical.rate}%) | Margin ${historical.margin}%`,
-        bets: [{ type: historical.type, val: historical.value, kind: historical.type === 'COLOR' ? 'color' : 'size' }]
+        type: 'SIZE', val: size, conf: 90, pat: 'SIZE', mode: 'SIZE',
+        pattern: `CALC-${lastDigit}`, lastDigit,
+        decisionReason: `${nextLast3Num} × exp(${currentResult}) -> ${lastDigit} | NORMAL SIZE`,
+        bets: [{ type: 'SIZE', val: size, kind: 'size' }]
     };
 }
 
-function decidePrediction(list, currentLevel, userId) {
+function getNetlifySizePrediction(list) {
+    const latest = Array.isArray(list) ? list[0] : null;
+    const n = Number.parseInt(String(latest?.number ?? ''), 10);
+    if (!latest || !Number.isInteger(n) || n < 0 || n > 9) {
+        return { skip: true, reason: 'Netlify SIZE source returned no valid latest result' };
+    }
+    // Exact SIZE mapping used by the supplied Netlify page.
+    const mapping = ['BIG', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG'];
+    const size = mapping[n];
+    return {
+        type: 'SIZE',
+        val: size,
+        mode: 'NETLIFY-SIZE',
+        pat: 'NETLIFY-SIZE',
+        pattern: `NETLIFY-RESULT-${n}`,
+        decisionReason: `Netlify live source result ${n} -> ${size}`,
+        bets: [{ type: 'SIZE', val: size, kind: 'size' }]
+    };
+}
+
+async function decidePrediction(list, currentLevel, userId) {
     if (!Array.isArray(list) || list.length < 2) return null;
     initState(userId);
     const cfgMode = String(autobetCfg[userId]?.mode || 'SIZE').toUpperCase();
     if (cfgMode === 'COMBINED') return { skip: true, reason: 'Combined mode uses its live source predictor' };
-    const state = userStates[userId];
-    state.calculationHistoryTable = analyzeCalculationDigitHistory(list._oldAnalysis);
-    return calculatePastedModePrediction(list, state) ||
-        { skip: true, reason: 'Not enough old Lucifer calculation history for this digit' };
+    if (cfgMode === 'SIZE') return getNetlifySizePrediction(list);
+
+    const currentResult = getResultNumber(list[0]);
+    if (currentResult === null) {
+        return { skip: true, reason: 'Current result is unavailable' };
+    }
+
+    const oldHistory = await fetchLuciferOldHistoryForAnalysis();
+    const analysisHistory = oldHistory.length >= 2 ? oldHistory : list;
+    const historySignal = analyzeCalculatedResultMode(
+        analysisHistory,
+        list[0]?.issueNumber ?? list[0]?.issue,
+        currentResult
+    );
+
+    return historySignal || generateRandomBigSmallFallback(
+        list[0]?.issueNumber ?? list[0]?.issue
+    );
 }
 
 function recordLossStreakHit(userId) {
@@ -2426,14 +2775,14 @@ function updateAfterResult(userId, wasWin, actual, betPlaced) {
     state.history.push(wasWin ? 'W' : 'L');
     if (state.history.length > 20) state.history.shift();
 
-    // W/L never changes SIZE/COLOUR mode. The selected mode remains active;
-    // only the calculation-digit historical pattern chooses the next value.
-    state.mode = state.mode === 'RECOVERY' ? 'RECOVERY' : 'NORMAL';
-    state.nextPredictionMode = state.mode === 'RECOVERY' ? 'COLOUR' : 'SIZE';
+    // Do not change prediction mode after WIN or LOSS. The next period's
+    // history selector chooses its own SIZE/COLOUR signal.
     state.pastedMode = false;
     state.lossStreak = wasWin ? 0 : (Number(state.lossStreak) || 0) + 1;
-    console.log(`[MODE] unchanged=${state.mode} after ${wasWin ? 'WIN' : 'LOSS'} | next=${state.nextPredictionMode} | history=${state.history.join(',')}`);
+    console.log(`[RESULT] ${wasWin ? 'WIN' : 'LOSS'} recorded; next mode will be selected from current-period history`);
 
+    // A win resets the martingale level for both SIZE and COLOUR, including
+    // WATCH settlements where no live stake was placed.
     const st = autobetState[userId];
     if (wasWin && st) {
         st.level = 1; st.sizeLevel = 1; st.numberLevel = 1;
@@ -2547,9 +2896,8 @@ async function handleLoss(userId, chatId, actual, num, betLevel, bets = [], sett
 // ============================================================
 function getActualColorBase(number) {
     const n = Number(number);
-    // WinGo color mapping from the supplied game screenshot:
-    // even numbers = RED, odd numbers = GREEN.
-    if (!Number.isInteger(n) || n < 0 || n > 9) return null;
+    if (n === 0) return 'RED';
+    if (n === 5) return 'GREEN';
     return n % 2 === 0 ? 'RED' : 'GREEN';
 }
 
@@ -2565,10 +2913,7 @@ function parseItem(item) {
     return {
         n,
         size: n >= 5 ? "BIG" : "SMALL",
-        color:
-            n === 0 ? "RED" :
-            n === 5 ? "GREEN" :
-            n % 2 === 0 ? "RED" : "GREEN"
+        color: n === 0 ? "RED" : n === 5 ? "GREEN" : n % 2 === 0 ? "RED" : "GREEN"
     };
 }
 
@@ -2625,26 +2970,72 @@ async function runPredict(userId, chatId) {
 
     initState(userId);
     const signal = cfg.mode === "COMBINED"
-        ? getCombinedSourcePrediction(list, userId)
+        ? await getCombinedSourcePrediction(list, userId)
         : await decidePrediction(list, next, userId);
-    if(!signal) { scheduleRun(userId, chatId, 5000); runInFlight.delete(runKey); return; }
+    if(!signal) {
+        await send(chatId,
+            "⏭️ SKIP\n" +
+            "Period: " + next.slice(-6) + "\n" +
+            "Reason: Prediction signal unavailable"
+        );
+        scheduleRun(userId, chatId, 5000);
+        runInFlight.delete(runKey);
+        return;
+    }
     if (signal.skip === true) {
-        console.log(`[PREDICTION] Skipping period ${next}: ${signal.reason || "skip result"}`);
+        const reason = signal.reason || "Signal filter rejected this period";
+        console.log(`[PREDICTION] Skipping period ${next}: ${reason}`);
+        await send(chatId,
+            "⏭️ SKIP\n" +
+            "Period: " + next.slice(-6) + "\n" +
+            "Reason: " + reason
+        );
         scheduleRun(userId, chatId, 8000);
         runInFlight.delete(runKey);
         return;
     }
-    let abLine = "🤖 AutoBet: OFF";
+
+    // Confidence is a filter, not a win guarantee. Do not force a bet when
+    // the predictor does not report a strong enough signal.
+    // Existing source-based signals do not expose a confidence field; keep
+    // them eligible, while still filtering any explicitly low-confidence signal.
+    const signalConfidence = Number(signal.conf ?? 90);
+    const minimumConfidence = 90;
+    if (!signal.fallback && (!Number.isFinite(signalConfidence) || signalConfidence < minimumConfidence)) {
+        const reason = `Confidence ${Number.isFinite(signalConfidence) ? signalConfidence : 0}% < required ${minimumConfidence}%`;
+        console.log(`[PREDICTION] Skipping period ${next}: ${reason}`);
+        await send(chatId,
+            "⏭️ SKIP\n" +
+            "Period: " + next.slice(-6) + "\n" +
+            "Reason: " + reason
+        );
+        scheduleRun(userId, chatId, 8000);
+        runInFlight.delete(runKey);
+        return;
+    }
+
+    // Mode is chosen by this period's strongest history signal, not by the
+    // previous period's WIN or LOSS.
+    state.mode = signal.type === 'COLOR' ? 'RECOVERY' : 'NORMAL';
+    state.nextPredictionMode = signal.type === 'COLOR' ? 'COLOUR' : 'SIZE';
+
+    let abLine = signal.fallback
+        ? "🤖 AutoBet: OFF (RANDOM FALLBACK)"
+        : "🤖 AutoBet: OFF";
     let canBet = false;
 
     if (!cfg || !cfg.enabled) {
-        abLine = "🤖 AutoBet: OFF";
+        abLine = signal.fallback
+            ? "🤖 AutoBet: OFF (RANDOM FALLBACK)"
+            : "🤖 AutoBet: OFF";
         canBet = false;
-    } else {
+    } else if (!signal.fallback) {
         canBet = true;
         const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
         const curBet = sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
+    } else {
+        canBet = false;
     }
 
     const patternName = signal && signal.pat ? signal.pat : (state && state.mode ? state.mode : "NORMAL");
@@ -2658,9 +3049,11 @@ async function runPredict(userId, chatId) {
 "║ Game    : BIG/SMALL\n"+
 "║ Mode    : "+String(signal.mode || signal.pat || "PATTERN-5/4")+"\n"+
 "║ Pattern : "+String(signal.pattern || "LAST-5/LAST-4")+"\n"+
+"║ Number  : "+String(signal.number ?? "-")+"\n"+
+"║ Conf.   : "+String(signal.conf ?? signal.numberConfidence ?? "-")+"%\n"+
 "║ "+(signal.type === "COLOR" ? "Color   : " : "Size    : ")+signal.val+"\n"+
 "║ Result  : "+formatPrediction(signal)+"\n"+
-"║ Source  : Live Jade site\n"+
+"║ Source  : "+(signal.mode === "NETLIFY-SIZE" ? "Netlify live size" : "Netlify size + Lucifer history")+"\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
 waitLine+"\n"+
@@ -2811,6 +3204,19 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
             ? Number(b.val) === num
             : b.type === "COLOR" ? String(b.val).toUpperCase() === actualColor
             : b.type === "SIZE" && b.val === actualSize);
+        if (cfg.mode === "COMBINED") {
+            const predictedSize = evaluationBets.find(b => b.type === "SIZE")?.val || "-";
+            const predictedNumber = evaluationBets.find(b => b.type === "NUMBER")?.val;
+            const sizeStatus = sizeMatched ? "WIN ✅" : "LOSS ❌";
+            const numberStatus = numberMatched ? "WIN ✅" : "LOSS ❌";
+            await send(chatId,
+                "🎮 COMBINED RESULT\n" +
+                `Period: ${target}\n` +
+                `Size: ${predictedSize} → ${actualSize} (${sizeStatus})\n` +
+                `Number: ${predictedNumber ?? "-"} → ${num} (${numberStatus})\n` +
+                `Overall: ${win ? "WIN ✅" : "LOSS ❌"}`
+            );
+        }
         // Exact flip rules from the new Netlify page. Apply only after LOSS.
         if (cfg.mode === "COMBINED") {
             const sourceState = userStates[String(userId)] || (userStates[String(userId)] = {});
