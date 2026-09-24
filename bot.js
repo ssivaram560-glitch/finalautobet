@@ -1114,17 +1114,18 @@ async function getBSColourNumberPrediction(list, userId, includeNumber) {
     const latestCategory = categoryFromNumber(n);
     const sizeReport = analyzeCategoryChance(fullHistory, 'SIZE', latestCategory.size);
     const colourReport = analyzeCategoryChance(fullHistory, 'COLOR', latestCategory.color);
-    if (sizeReport.value === null && colourReport.value === null) {
-        return { skip: true, reason: 'Size and colour chances are tied; no forced prediction' };
-    }
-
-    // Select only the category with the higher empirical chance. A tie is skipped.
+    // Select the category with the higher empirical chance. Never skip: when
+    // chances are tied, prefer SIZE; when an individual category has no clear
+    // historical winner, use the latest source category as its fallback.
+    const sizeFallback = sizeReport.value || latestCategory.size;
+    const colourFallback = colourReport.value || latestCategory.color;
     const category = sizeReport.value !== null && (colourReport.value === null || sizeReport.confidence > colourReport.confidence)
         ? { type: 'SIZE', value: sizeReport.value, report: sizeReport }
         : colourReport.value !== null && (sizeReport.value === null || colourReport.confidence > sizeReport.confidence)
             ? { type: 'COLOR', value: colourReport.value, report: colourReport }
-            : null;
-    if (!category) return { skip: true, reason: 'Size and colour chances are equal; no forced prediction' };
+            : sizeReport.tested >= colourReport.tested
+                ? { type: 'SIZE', value: sizeFallback, report: sizeReport }
+                : { type: 'COLOR', value: colourFallback, report: colourReport };
 
     const signal = {
         type: includeNumber ? 'COMBINED_COLOUR_NUMBER' : category.type,
