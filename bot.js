@@ -639,7 +639,7 @@ async function captchaLogin(userId, chatId, phone, password, bot, logBoth) {
 //  CONFIG
 // ============================================================
 // Keep secrets outside the source code.
-const BOT_TOKEN    = process.env.BOT_TOKEN || "8957443232:AAEUBtzwrE-yb2KZQb_GmJ-bd9p2mtVZvVA";
+const BOT_TOKEN    = process.env.BOT_TOKEN || "8801907570:AAHdrMAbkmgckFDDb64X12t6HUANVnE95oc";
 const OWNER_ID     = 8869874751;
 const OWNER_PASS   = process.env.OWNER_PASS || "2004";
 const ADMIN_HANDLE = "@Sivakutty1";
@@ -661,8 +661,6 @@ const COMBINED_PAGE_URL = "https://endearing-bavarois-067272.netlify.app/";
 const COMBINED_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json";
 // Lucifer root returns the complete historical dataset used for shared number ranking.
 const LUCIFER_FULL_HISTORY_URL = "https://luciferapi.com/";
-// The supplied Netlify page uses this live 30-second draw source for SIZE.
-const NETLIFY_SIZE_SOURCE_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 const SITE_URL    = "https://www.ts777.co";
 const LOGIN_PAGE_URL = "https://www.ts777.co/login";
 const CHROME_ARGS = [
@@ -1045,34 +1043,6 @@ async function fetchCombinedSourceList() {
     }
 }
 
-async function fetchNetlifySizeList() {
-    try {
-        const response = await axios.get(NETLIFY_SIZE_SOURCE_URL + '?_=' + Date.now(), {
-            headers: {
-                'Accept': 'application/json',
-                'Cache-Control': 'no-cache, no-store, max-age=0',
-                'Pragma': 'no-cache',
-                'Origin': COMBINED_PAGE_URL.replace(/\/$/, ''),
-                'Referer': COMBINED_PAGE_URL,
-                'User-Agent': 'Mozilla/5.0'
-            },
-            timeout: 10000,
-            maxContentLength: 512 * 1024,
-            maxBodyLength: 512 * 1024,
-            validateStatus: status => status >= 200 && status < 300
-        });
-        const raw = Array.isArray(response.data?.data?.list) ? response.data.data.list : [];
-        return raw.map(item => ({
-            issueNumber: String(item?.issueNumber ?? ''),
-            number: String(item?.number ?? '').replace(/\D/g, '').slice(-1),
-            color: String(item?.color ?? '')
-        })).filter(item => /^\d+$/.test(item.issueNumber) && /^[0-9]$/.test(item.number));
-    } catch (error) {
-        console.error('[NETLIFY SIZE SOURCE ERROR]', error?.message || error);
-        return null;
-    }
-}
-
 async function fetchLuciferFullHistory() {
     try {
         const response = await axios.get(LUCIFER_FULL_HISTORY_URL + '?_=' + Date.now(), {
@@ -1098,6 +1068,97 @@ async function fetchLuciferFullHistory() {
 function getCombinedStrategySize(n) {
     const mapping = ['BIG', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG'];
     return mapping[Number(n)] || null;
+}
+
+
+function categoryFromNumber(n) {
+    const number = Number(n);
+    return { size: number >= 5 ? 'BIG' : 'SMALL', color: getActualColorBase(number) };
+}
+
+function candidatePoolForCategory(type, value) {
+    if (type === 'SIZE') return value === 'BIG' ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
+    return value === 'RED' ? [0, 2, 4, 6, 8] : [1, 3, 5, 7, 9];
+}
+
+function analyzeCategoryChance(history, type, currentValue) {
+    const rows = Array.isArray(history) ? history : [];
+    const counts = { BIG: 0, SMALL: 0, RED: 0, GREEN: 0 };
+    let tested = 0;
+    // Estimate the next-category distribution after the current category value.
+    for (let i = 1; i < rows.length; i++) {
+        const current = latestResultNumber(rows[i]);
+        const next = latestResultNumber(rows[i - 1]);
+        if (current === null || next === null) continue;
+        const currentCategory = categoryFromNumber(current)[type === 'SIZE' ? 'size' : 'color'];
+        if (currentCategory !== currentValue) continue;
+        const nextCategory = categoryFromNumber(next)[type === 'SIZE' ? 'size' : 'color'];
+        counts[nextCategory]++;
+        tested++;
+    }
+    const choices = type === 'SIZE' ? ['BIG', 'SMALL'] : ['RED', 'GREEN'];
+    const a = counts[choices[0]];
+    const b = counts[choices[1]];
+    if (!tested || a === b) return { type, value: null, confidence: tested ? Math.round(Math.max(a, b) / tested * 100) : 0, tested, counts, tie: true };
+    const value = a > b ? choices[0] : choices[1];
+    return { type, value, confidence: Math.round(Math.max(a, b) / tested * 100), tested, counts, tie: false };
+}
+
+async function getBSColourNumberPrediction(list, userId, includeNumber) {
+    const latest = Array.isArray(list) && list[0];
+    const n = latestResultNumber(latest);
+    if (!latest || n === null) return { skip: true, reason: 'Source returned no valid latest result' };
+    const fullHistory = await fetchLuciferFullHistory();
+    if (fullHistory.length < 3) return { skip: true, reason: 'Not enough history for size/colour chance analysis' };
+
+    const latestCategory = categoryFromNumber(n);
+    const sizeReport = analyzeCategoryChance(fullHistory, 'SIZE', latestCategory.size);
+    const colourReport = analyzeCategoryChance(fullHistory, 'COLOR', latestCategory.color);
+    if (sizeReport.value === null && colourReport.value === null) {
+        return { skip: true, reason: 'Size and colour chances are tied; no forced prediction' };
+    }
+
+    // Select only the category with the higher empirical chance. A tie is skipped.
+    const category = sizeReport.value !== null && (colourReport.value === null || sizeReport.confidence > colourReport.confidence)
+        ? { type: 'SIZE', value: sizeReport.value, report: sizeReport }
+        : colourReport.value !== null && (sizeReport.value === null || colourReport.confidence > sizeReport.confidence)
+            ? { type: 'COLOR', value: colourReport.value, report: colourReport }
+            : null;
+    if (!category) return { skip: true, reason: 'Size and colour chances are equal; no forced prediction' };
+
+    const signal = {
+        type: includeNumber ? 'COMBINED_COLOUR_NUMBER' : category.type,
+        val: category.value,
+        mode: includeNumber ? 'BS-COLOUR+NUMBER' : 'BS-COLOUR',
+        pat: 'HIGHER-CHANCE-SIZE-OR-COLOUR',
+        pattern: `${category.type}-${category.value}`,
+        conf: category.report.confidence,
+        categoryConfidence: category.report.confidence,
+        decisionReason: `${category.type} ${category.value} chance ${category.report.confidence}% (${category.report.tested} samples); size ${sizeReport.confidence}% vs colour ${colourReport.confidence}%`,
+        bets: [{ type: category.type, val: category.value, kind: category.type === 'COLOR' ? 'color' : 'size' }]
+    };
+
+    if (includeNumber) {
+        const pool = candidatePoolForCategory(category.type, category.value);
+        const matchingRows = fullHistory.filter(row => {
+            const rowCategory = categoryFromNumber(row.number)[category.type === 'SIZE' ? 'size' : 'color'];
+            return rowCategory === category.value;
+        });
+        const numberCounts = Object.fromEntries(pool.map(value => [value, 0]));
+        for (const row of matchingRows) {
+            const following = fullHistory[fullHistory.indexOf(row) - 1];
+            if (following && pool.includes(following.number)) numberCounts[following.number]++;
+        }
+        const number = pool.slice().sort((a, b) => numberCounts[b] - numberCounts[a] || a - b)[0];
+        const numberTotal = pool.reduce((sum, value) => sum + numberCounts[value], 0);
+        const numberConfidence = numberTotal ? Math.round(numberCounts[number] / numberTotal * 100) : 0;
+        signal.number = number;
+        signal.numberConfidence = numberConfidence;
+        signal.pattern += `+NUMBER-${number}`;
+        signal.decisionReason += `; number ${number} selected from ${category.value} pool [${pool.join(',')}] with ${numberConfidence}% share`;
+        signal.bets.push({ type: 'NUMBER', val: number, kind: 'number' });
+    }
+    return signal;
 }
 
 async function getCombinedSourcePrediction(list, userId) {
@@ -1501,8 +1562,7 @@ function generateRandomBigSmallFallback(period) {
 async function fetchListForUser(userId) {
     const mode = String(autobetCfg[userId]?.mode || '').toUpperCase();
     if (mode === 'COMBINED') return await fetchCombinedSourceList();
-    if (mode === 'SIZE') return await fetchNetlifySizeList();
-    // NUMBER mode keeps the existing source.
+    // Big/Small uses the Lucifer 30-second history directly.
     return await fetchList();
 }
 
@@ -1607,7 +1667,7 @@ function initUser(id) {
             nextProfitSwitch: 0
         }
     };
-    if (autobetCfg[id].mode !== "SIZE" && autobetCfg[id].mode !== "NUMBER" && autobetCfg[id].mode !== "COMBINED") autobetCfg[id].mode = "SIZE";
+    if (!["SIZE", "NUMBER", "COMBINED", "BS_COLOR_NUMBER", "BS_COLOR"].includes(autobetCfg[id].mode)) autobetCfg[id].mode = "SIZE";
     if (!Array.isArray(autobetCfg[id].customBets) || !autobetCfg[id].customBets.length) autobetCfg[id].customBets = [1,3,9,27,81];
     if (!Array.isArray(autobetCfg[id].customSizeBets) || !autobetCfg[id].customSizeBets.length) autobetCfg[id].customSizeBets = [1,2,4,8,16];
     if (!Array.isArray(autobetCfg[id].customNumberBets) || !autobetCfg[id].customNumberBets.length) autobetCfg[id].customNumberBets = [1,9,81,729,6561];
@@ -1760,7 +1820,7 @@ function ownerMemberDetails() {
         out += "P&L         : " + (Number(pt.pnl) >= 0 ? "+" : "") + money(pt.pnl) + "\n";
         out += "Win/Loss    : " + (pt.wins || 0) + "W / " + (pt.losses || 0) + "L\n";
         out += "Level usage : " + levelHistory + "\n";
-        if (cfg.mode === "COMBINED") out += "Wins by L   : Size " + sizeWins + " | Number " + numberWins + "\n";
+        if (isDualLegMode(cfg.mode)) out += "Wins by L   : Category " + sizeWins + " | Number " + numberWins + "\n";
         else out += "Wins by L   : " + levelMapText(stats[uid]?.levelWins) + "\n";
         out += "------------------------\n";
         return out;
@@ -1983,7 +2043,7 @@ async function placeBet(userId, chatId, period, prediction, predType, level, amo
                 amount:      1,
                 betContent:  bc,
                 betMultiple: betMult,
-                gameCode:    cfg.mode === "COMBINED" ? "WinGo_1M" : "WinGo_30S",
+                gameCode:    isDualLegMode(cfg.mode) ? "WinGo_1M" : "WinGo_30S",
                 issueNumber: String(period),
                 language:    "en",
                 random:      Math.floor(Math.random() * 1e12)
@@ -2154,12 +2214,29 @@ function initState(userId) {
 }
 
 function modeLabel(mode) {
-    return mode === "NUMBER" ? "NUMBER" : mode === "COMBINED" ? "BIG/SMALL + NUMBER" : "BIG/SMALL";
+    return mode === "NUMBER" ? "NUMBER" :
+        mode === "COMBINED" ? "BIG/SMALL + NUMBER" :
+        mode === "BS_COLOR_NUMBER" ? "BS/COLOUR + NUMBER" :
+        mode === "BS_COLOR" ? "BS/COLOUR" :
+        "BIG/SMALL";
 }
+
+function isCategoryNumberMode(mode) {
+    return ["COMBINED", "BS_COLOR_NUMBER"].includes(String(mode).toUpperCase());
+}
+
+function isCategoryColourMode(mode) {
+    return ["BS_COLOR", "BS_COLOR_NUMBER"].includes(String(mode).toUpperCase());
+}
+
+function isDualLegMode(mode) {
+    return ["COMBINED", "BS_COLOR_NUMBER"].includes(String(mode).toUpperCase());
+}
+
 
 function getSequenceAmount(userId, level, kind = "default") {
     const cfg = autobetCfg[userId] || {};
-    const seq = cfg.mode === "COMBINED" ? (kind === "number" ? cfg.customNumberBets : cfg.customSizeBets) : cfg.customBets;
+    const seq = isDualLegMode(cfg.mode) ? (kind === "number" ? cfg.customNumberBets : cfg.customSizeBets) : isCategoryColourMode(cfg.mode) ? cfg.customSizeBets : cfg.customBets;
     return Number(seq?.[level - 1] ?? (cfg.baseBet * (MULT[level - 1] || 1)));
 }
 
@@ -2216,7 +2293,7 @@ function syncProfitPlan(userId, reason = "balance", planBalance = null, maxLevel
     plan.planBalance = configuredBalance;
     plan.maxLevel = levels;
     plan.levels = walletPlan;
-    cfg.customBets = cfg.mode === "NUMBER" ? [...numberBets] : cfg.mode === "COMBINED" ? [...totals] : [...sizeBets];
+    cfg.customBets = cfg.mode === "NUMBER" ? [...numberBets] : isDualLegMode(cfg.mode) ? [...totals] : [...sizeBets];
     cfg.customSizeBets = sizeBets;
     cfg.customNumberBets = numberBets;
     cfg.maxLvl = walletPlan.length;
@@ -2295,6 +2372,31 @@ function calculateSettlement(bets, actualSize, actualNumber) {
     };
 }
 
+
+function updateColourNumberAfterResult(userId, categoryWon, numberWon, betPlaced) {
+    initUser(userId);
+    const st = autobetState[userId];
+    const cfg = autobetCfg[userId] || {};
+    if (!betPlaced || !isCategoryColourMode(cfg.mode)) return;
+    const anyWin = Boolean(categoryWon || numberWon);
+    if (anyWin) {
+        st.lastWinLevel = st.level;
+        st.lastWinMode = cfg.mode;
+        st.sizeLevel = 1;
+        st.numberLevel = 1;
+        st.level = 1;
+        st.inMart = false;
+        st.consecutiveLoss = 0;
+    } else {
+        st.consecutiveLoss++;
+        const maxLevel = Math.max(1, Number(cfg.maxLvl) || 1);
+        st.sizeLevel = Math.min(maxLevel, Math.max(1, Number(st.sizeLevel) || 1)) >= maxLevel ? 1 : st.sizeLevel + 1;
+        st.numberLevel = Math.min(maxLevel, Math.max(1, Number(st.numberLevel) || 1)) >= maxLevel ? 1 : st.numberLevel + 1;
+        st.level = Math.max(st.sizeLevel, st.numberLevel);
+        st.inMart = st.level > 1;
+    }
+}
+
 function updateCombinedAfterResult(userId, sizeWon, numberWon, betPlaced) {
     initUser(userId);
     const st = autobetState[userId];
@@ -2332,7 +2434,7 @@ function formatPrediction(signal) {
     if (signal.type === "NUMBER") return String(Number(signal.val));
     if (signal.type === "SIZE") return String(signal.val || "").toUpperCase();
     if (signal.type === "COLOR") return String(signal.val || "").toUpperCase();
-    if (signal.type === "COMBINED") {
+    if (signal.type === "COMBINED" || signal.type === "COMBINED_COLOUR_NUMBER") {
         const size = String(signal.val || "").toUpperCase();
         const number = signal.number ?? signal.bets?.find(b => b.type === "NUMBER")?.val;
         return number === undefined ? size : `${size} OR ${Number(number)}`;
@@ -2707,32 +2809,11 @@ function calculatePastedModePrediction(list, state) {
     };
 }
 
-function getNetlifySizePrediction(list) {
-    const latest = Array.isArray(list) ? list[0] : null;
-    const n = Number.parseInt(String(latest?.number ?? ''), 10);
-    if (!latest || !Number.isInteger(n) || n < 0 || n > 9) {
-        return { skip: true, reason: 'Netlify SIZE source returned no valid latest result' };
-    }
-    // Exact SIZE mapping used by the supplied Netlify page.
-    const mapping = ['BIG', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG', 'SMALL', 'SMALL', 'SMALL', 'BIG'];
-    const size = mapping[n];
-    return {
-        type: 'SIZE',
-        val: size,
-        mode: 'NETLIFY-SIZE',
-        pat: 'NETLIFY-SIZE',
-        pattern: `NETLIFY-RESULT-${n}`,
-        decisionReason: `Netlify live source result ${n} -> ${size}`,
-        bets: [{ type: 'SIZE', val: size, kind: 'size' }]
-    };
-}
-
 async function decidePrediction(list, currentLevel, userId) {
     if (!Array.isArray(list) || list.length < 2) return null;
     initState(userId);
     const cfgMode = String(autobetCfg[userId]?.mode || 'SIZE').toUpperCase();
     if (cfgMode === 'COMBINED') return { skip: true, reason: 'Combined mode uses its live source predictor' };
-    if (cfgMode === 'SIZE') return getNetlifySizePrediction(list);
 
     const currentResult = getResultNumber(list[0]);
     if (currentResult === null) {
@@ -2808,11 +2889,11 @@ function levelMapText(map) {
 }
 
 function formatMartingale(cfg) {
-    if (cfg.mode === "COMBINED") {
-        return "Size: ₹" + cfg.customSizeBets.slice(0, cfg.maxLvl).join(" → ₹") +
+    if (isDualLegMode(cfg.mode)) {
+        return "Category: ₹" + cfg.customSizeBets.slice(0, cfg.maxLvl).join(" → ₹") +
             "\nNumber: ₹" + cfg.customNumberBets.slice(0, cfg.maxLvl).join(" → ₹");
     }
-    const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
+    const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : isCategoryColourMode(cfg.mode) ? cfg.customSizeBets : cfg.customBets;
     return "Bet: ₹" + sequence.slice(0, cfg.maxLvl).join(" → ₹");
 }
 
@@ -2971,7 +3052,11 @@ async function runPredict(userId, chatId) {
     initState(userId);
     const signal = cfg.mode === "COMBINED"
         ? await getCombinedSourcePrediction(list, userId)
-        : await decidePrediction(list, next, userId);
+        : (cfg.mode === "BS_COLOR_NUMBER"
+            ? await getBSColourNumberPrediction(list, userId, true)
+            : cfg.mode === "BS_COLOR"
+                ? await getBSColourNumberPrediction(list, userId, false)
+                : await decidePrediction(list, next, userId));
     if(!signal) {
         await send(chatId,
             "⏭️ SKIP\n" +
@@ -3031,8 +3116,10 @@ async function runPredict(userId, chatId) {
         canBet = false;
     } else if (!signal.fallback) {
         canBet = true;
-        const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : cfg.customBets;
-        const curBet = sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
+        const sequence = cfg.mode === "NUMBER" ? cfg.customNumberBets : isCategoryColourMode(cfg.mode) ? cfg.customSizeBets : cfg.customBets;
+        const curBet = isDualLegMode(cfg.mode)
+            ? (Number(cfg.customSizeBets?.[st.sizeLevel - 1] || 0) + Number(cfg.customNumberBets?.[st.numberLevel - 1] || 0))
+            : sequence[st.level - 1] ?? (cfg.baseBet * (MULT[st.level - 1] || 1));
         abLine = (st.level > 1 ? "📈 MART " : "💰 BET ") + "L" + st.level + ": ₹" + curBet;
     } else {
         canBet = false;
@@ -3053,7 +3140,7 @@ async function runPredict(userId, chatId) {
 "║ Conf.   : "+String(signal.conf ?? signal.numberConfidence ?? "-")+"%\n"+
 "║ "+(signal.type === "COLOR" ? "Color   : " : "Size    : ")+signal.val+"\n"+
 "║ Result  : "+formatPrediction(signal)+"\n"+
-"║ Source  : "+(signal.mode === "NETLIFY-SIZE" ? "Netlify live size" : "Netlify size + Lucifer history")+"\n"+
+"║ Source  : Netlify size + Lucifer history\n"+
 "╠══════════════════════════╣\n"+
 "║ "+abLine+"\n"+
 waitLine+"\n"+
@@ -3068,32 +3155,37 @@ waitLine+"\n"+
         const sizeSpec = rawSpecs.find(spec => spec.type === "SIZE");
         const colorSpec = rawSpecs.find(spec => spec.type === "COLOR");
         const numberSpec = rawSpecs.find(spec => spec.type === "NUMBER");
+        const categorySpec = cfg.mode === "BS_COLOR" || cfg.mode === "BS_COLOR_NUMBER" ? (colorSpec || sizeSpec) : sizeSpec;
         const specs = cfg.mode === "COMBINED"
             ? [sizeSpec, numberSpec].filter(Boolean)
-            : cfg.mode === "NUMBER"
+            : cfg.mode === "BS_COLOR_NUMBER"
+                ? [categorySpec, numberSpec].filter(Boolean)
+                : cfg.mode === "BS_COLOR"
+                    ? [categorySpec].filter(Boolean)
+                    : cfg.mode === "NUMBER"
                 ? [numberSpec].filter(Boolean)
                 : [colorSpec || sizeSpec].filter(Boolean);
         const combinedAmounts = getCombinedBetAmounts(userId, st.sizeLevel, st.numberLevel);
         for (const spec of specs) {
             const isNumber = spec.type === "NUMBER";
-            const levelForBet = cfg.mode === "COMBINED"
+            const levelForBet = isDualLegMode(cfg.mode)
                 ? (isNumber ? combinedAmounts.numberLevel : combinedAmounts.sizeLevel)
                 : st.level;
-            const sequence = isNumber ? cfg.customNumberBets : cfg.customBets;
-            const amount = cfg.mode === "COMBINED"
+            const sequence = isNumber ? cfg.customNumberBets : isCategoryColourMode(cfg.mode) ? cfg.customSizeBets : cfg.customBets;
+            const amount = isDualLegMode(cfg.mode)
                 ? (isNumber ? combinedAmounts.number : combinedAmounts.size)
                 : (sequence[levelForBet - 1] ?? (cfg.baseBet * (MULT[levelForBet - 1] || 1)));
             const result = await placeBet(userId, chatId, next, spec.val, spec.type, levelForBet, amount);
             if (result && result.ok) placedBets.push({ ...spec, amt: result.amt, level: levelForBet });
             else await send(chatId, "❌ Bet Failed (" + spec.type + "): " + (result?.msg || "Unknown error"));
         }
-        if (cfg.mode === "COMBINED" && placedBets.length !== 2) {
+        if (isDualLegMode(cfg.mode) && placedBets.length !== (cfg.mode === "BS_COLOR" ? 1 : 2)) {
             // Never treat a partial combined pair as a valid combined settlement.
             await send(chatId, "⚠️ Combined bet incomplete for period " + next + ". Expected exactly 1 size + 1 number; settlement will use only the confirmed stake.");
         }
         if (placedBets.length) {
-            const levelText = cfg.mode === "COMBINED"
-                ? "Size L" + combinedAmounts.sizeLevel + " / Number L" + combinedAmounts.numberLevel
+            const levelText = isDualLegMode(cfg.mode)
+                ? "Category L" + combinedAmounts.sizeLevel + " / Number L" + combinedAmounts.numberLevel
                 : "L" + st.level;
             await send(chatId, "✅ Bets Success: " + placedBets.length + " | " + levelText + "\n" + placedBets.map(b => b.type + "=" + b.val + " ₹" + b.amt).join("\n") + "\n⏳ Checking result...");
         }
@@ -3103,7 +3195,9 @@ waitLine+"\n"+
     const rawPredictedBets = signal.bets || [{ type: signal.type, val: signal.val, kind: signal.type === "NUMBER" ? "number" : "size" }];
     const predictedBets = cfg.mode === "COMBINED"
         ? rawPredictedBets.filter(spec => spec.type === "SIZE" || spec.type === "NUMBER")
-        : cfg.mode === "NUMBER"
+        : cfg.mode === "BS_COLOR_NUMBER" || cfg.mode === "BS_COLOR"
+            ? rawPredictedBets.filter(spec => spec.type === "SIZE" || spec.type === "COLOR" || spec.type === "NUMBER")
+            : cfg.mode === "NUMBER"
             ? rawPredictedBets.filter(spec => spec.type === "NUMBER")
             : rawPredictedBets.filter(spec => spec.type === "SIZE" || spec.type === "COLOR");
     checkResult(userId, chatId, next, signal.val, signal.type, placedBets, predictedBets);
@@ -3196,24 +3290,28 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         const numberMatched = evaluationBets.some(b => b.type === "NUMBER" && Number(b.val) === num);
         const colorMatched = evaluationBets.some(b => b.type === "COLOR" && String(b.val).toUpperCase() === actualColor);
         const isCombinedBet = evaluationBets.some(b => b.type === "SIZE") && evaluationBets.some(b => b.type === "NUMBER");
+        const isColourNumberBet = evaluationBets.some(b => b.type === "COLOR") && evaluationBets.some(b => b.type === "NUMBER");
         // In COMBINED mode, a NUMBER win resets both size and number levels,
         // even if the size leg was not placed or did not match.
         const combinedResult = cfg.mode === "COMBINED" && (isCombinedBet || numberMatched);
+        const colourNumberResult = isCategoryColourMode(cfg.mode) && (isColourNumberBet || numberMatched || colorMatched || sizeMatched);
         const settlement = betPlaced ? calculateSettlement(bets, actualSize, num) : null;
         const win = settlement ? settlement.won : evaluationBets.some(b => b.type === "NUMBER"
             ? Number(b.val) === num
             : b.type === "COLOR" ? String(b.val).toUpperCase() === actualColor
             : b.type === "SIZE" && b.val === actualSize);
-        if (cfg.mode === "COMBINED") {
-            const predictedSize = evaluationBets.find(b => b.type === "SIZE")?.val || "-";
+        if (cfg.mode === "COMBINED" || cfg.mode === "BS_COLOR_NUMBER" || cfg.mode === "BS_COLOR") {
+            const predictedSize = evaluationBets.find(b => b.type === "SIZE")?.val || evaluationBets.find(b => b.type === "COLOR")?.val || "-";
+            const predictedCategory = evaluationBets.find(b => b.type === "SIZE" || b.type === "COLOR")?.val || "-";
             const predictedNumber = evaluationBets.find(b => b.type === "NUMBER")?.val;
-            const sizeStatus = sizeMatched ? "WIN ✅" : "LOSS ❌";
+            const categoryMatched = sizeMatched || colorMatched;
+            const sizeStatus = categoryMatched ? "WIN ✅" : "LOSS ❌";
             const numberStatus = numberMatched ? "WIN ✅" : "LOSS ❌";
             await send(chatId,
-                "🎮 COMBINED RESULT\n" +
+                "🎮 " + modeLabel(cfg.mode) + " RESULT\n" +
                 `Period: ${target}\n` +
-                `Size: ${predictedSize} → ${actualSize} (${sizeStatus})\n` +
-                `Number: ${predictedNumber ?? "-"} → ${num} (${numberStatus})\n` +
+                `Category: ${predictedCategory} → ${actualSize}/${actualColor} (${sizeStatus})\n` +
+                (predictedNumber === undefined ? "" : `Number: ${predictedNumber} → ${num} (${numberStatus})\n`) +
                 `Overall: ${win ? "WIN ✅" : "LOSS ❌"}`
             );
         }
@@ -3280,6 +3378,7 @@ async function checkResult(userId, chatId, target, predicted, predType, placedBe
         }
 
         if (combinedResult) updateCombinedAfterResult(userId, sizeMatched, numberMatched, betPlaced);
+        else if (colourNumberResult) updateColourNumberAfterResult(userId, colorMatched || sizeMatched, numberMatched, betPlaced);
         else updateAfterResult(userId, win, actualSize, betPlaced);
 
         const s = stats[userId];
@@ -3370,7 +3469,7 @@ function showStats(chatId,userId){
 "Results     : "+total+"\n"+
 "Wins/Losses : "+(d.win||0)+" / "+(d.loss||0)+"\n"+
 "Accuracy    : "+rate+"%\n"+bar+"\n\n"+
-"Current     : L"+st.level+(autobetCfg[userId].mode === "COMBINED" ? " (S"+st.sizeLevel+"/N"+st.numberLevel+")" : "")+"\n"+
+"Current     : L"+st.level+(isDualLegMode(autobetCfg[userId].mode) ? " (C"+st.sizeLevel+"/N"+st.numberLevel+")" : "")+"\n"+
 "Win streak  : "+(d.winStreak||0)+" | Best: "+(d.maxWinStreak||0)+"\n"+
 "Loss streak : "+(d.lossStreak||0)+" | Worst: "+(d.maxLossStreak||0)+"\n"+
 "Streak hits : "+(pt.lossStreakHits||0)+" (threshold L"+(autobetCfg[userId].watchLoss||1)+")\n"+
@@ -3441,7 +3540,7 @@ async function autobetStatus(chatId, userId) {
 "Token    : "+(token.length>20?"✅":"❌")+"\n"+
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌")+"\n"+
 "Mode     : "+modeLabel(cfg.mode)+"\n"+
-    (cfg.mode === "COMBINED" ? "Size Bets: ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Bets : ₹"+cfg.customNumberBets.join(" → ₹")+"\nRule     : 1 site size + 1 site number\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
+    (isDualLegMode(cfg.mode) ? "Category Bets: ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Bets : ₹"+cfg.customNumberBets.join(" → ₹")+"\nRule     : highest-chance category + number\n" : isCategoryColourMode(cfg.mode) ? "Category Bets: ₹"+cfg.customSizeBets.join(" → ₹")+"\nRule     : highest-chance category only\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+st.consecutiveLoss+"/"+cfg.watchLoss+"\n"+
 "Base Bet : ₹"+cfg.baseBet+"\n"+
@@ -3451,10 +3550,10 @@ async function autobetStatus(chatId, userId) {
 "Section Delay: "+cfg.restartDelay+" mins"+ // Hours-la irunthu Minutes-ku mathi irukken
 waitLine+"\n"+
 "In Mart  : "+(st.inMart?"YES":"NO")+"\n"+
-(cfg.mode === "COMBINED" ? "Size L"+st.sizeLevel+" | Number L"+st.numberLevel+"\n" : "Current  : L"+st.level+"\n")+
+(isDualLegMode(cfg.mode) ? "Category L"+st.sizeLevel+" | Number L"+st.numberLevel+"\n" : "Current  : L"+st.level+"\n")+
 "Last Win : "+(st.lastWinLevel?"L"+st.lastWinLevel+" ("+(st.lastWinMode||cfg.mode)+")":"None")+"\n"+
-(cfg.mode === "COMBINED" ? "Size Hist: "+(Object.entries(st.sizeLevelHistory||{}).map(([level,count]) => level+":"+count).join(" | ") || "None")+"\nNumber Hist: "+(Object.entries(st.numberLevelHistory||{}).map(([level,count]) => level+":"+count).join(" | ") || "None")+"\n" : "History  : "+(Object.entries(st.levelHistory||{}).map(([level,count]) => level+":"+count).join(" | ") || "None")+"\n")+
-"Wins Lvl : "+(cfg.mode === "COMBINED" ? "Size "+levelMapText(stats[userId].sizeLevelWins)+" | Number "+levelMapText(stats[userId].numberLevelWins) : levelMapText(stats[userId].levelWins))+"\n"+
+(isDualLegMode(cfg.mode) ? "Category Hist: "+(Object.entries(st.sizeLevelHistory||{}).map(([level,count]) => level+":"+count).join(" | ") || "None")+"\nNumber Hist: "+(Object.entries(st.numberLevelHistory||{}).map(([level,count]) => level+":"+count).join(" | ") || "None")+"\n" : "History  : "+(Object.entries(st.levelHistory||{}).map(([level,count]) => level+":"+count).join(" | ") || "None")+"\n")+
+"Wins Lvl : "+(isDualLegMode(cfg.mode) ? "Category "+levelMapText(stats[userId].sizeLevelWins)+" | Number "+levelMapText(stats[userId].numberLevelWins) : levelMapText(stats[userId].levelWins))+"\n"+
 "P&L      : "+(pt.pnl>=0?"+":"")+pt.pnl.toFixed(2)+"\n\n"+
 formatMartingale(cfg)
     );
@@ -3482,7 +3581,9 @@ const autobetMenu={keyboard:[
     ["⏳ Set Section Delay","🔢 Set Watch Losses"],
     ["📊 AutoBet Status","🔀 Customize Bet"],
     ["🎮 Mode: Big/Small","🔢 Mode: Number"],
-    ["🔀 Mode: BigSmall+Number","🔙 Back"]
+    ["🔀 Mode: BigSmall+Number"],
+    ["🎨 Mode: BSColours+Number","🎨 Mode: BS,Colour"],
+    ["🔙 Back"]
 ],resize_keyboard:true};
 
 // ============================================================
@@ -3884,7 +3985,7 @@ function addHandlers(){
 "Token    : "+(getToken(id).length>20?"✅ SET":"❌ MISSING")+"\n"+
 "AutoLogin: "+(creds.phone?"✅ "+creds.phone.slice(0,6)+"***":"❌ /setcreds  (or /setcredts)")+"\n"+
 "Mode     : "+modeLabel(cfg.mode)+"\n"+
-    (cfg.mode === "COMBINED" ? "Size Seq : ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Seq  : ₹"+cfg.customNumberBets.join(" → ₹")+"\nRule     : 1 site size + 1 site number\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
+    (isDualLegMode(cfg.mode) ? "Category Seq : ₹"+cfg.customSizeBets.join(" → ₹")+"\nNum Seq  : ₹"+cfg.customNumberBets.join(" → ₹")+"\nRule     : 1 category + 1 number\n" : "Bet Seq  : ₹"+cfg.customBets.join(" → ₹")+"\n")+
 "Watch    : "+(cfg.watch?"ON":"OFF")+"\n"+
 "WatchLoss: "+cfg.watchLoss+" consecutive\n"+
 "Base Bet : ₹"+cfg.baseBet+"\n"+
@@ -3933,6 +4034,16 @@ formatMartingale(cfg)+"\n\n"+
             autobetCfg[id].mode="COMBINED";
             return send(id,"✅ Mode set: BIG/SMALL + NUMBER\nOne site size bet + one site number bet.",{reply_markup:autobetMenu});
         }
+        if(text==="🎨 Mode: BSColours+Number"){
+            delete userAction[id];
+            autobetCfg[id].mode="BS_COLOR_NUMBER";
+            return send(id,"✅ Mode set: BS/COLOUR + NUMBER\nHigher-chance size OR colour + analysed exact number.",{reply_markup:autobetMenu});
+        }
+        if(text==="🎨 Mode: BS,Colour"){
+            delete userAction[id];
+            autobetCfg[id].mode="BS_COLOR";
+            return send(id,"✅ Mode set: BS/COLOUR\nOnly the higher-chance size OR colour is predicted.",{reply_markup:autobetMenu});
+        }
         if(text==="💰 Set Base Bet"){userAction[id]={action:"setbase"};return send(id,"Enter base bet amount (e.g. 1):");}
         if(text==="📈 Set Max Level"){userAction[id]={action:"setlvl"};return send(id,"Enter max level (1-10):");}
         if(text==="🧠 Set Plan Level"){userAction[id]={action:"setprofitplanlevel"};return send(id,"Enter plan start level (1-10):");}
@@ -3944,12 +4055,12 @@ formatMartingale(cfg)+"\n\n"+
         if(text==="🎯 Set Profit Target"){userAction[id]={action:"settarget"};return send(id,"Enter target profit (Min ₹10):");}
         if(text==="⏳ Set Section Delay"){userAction[id]={action:"setdelay"};return send(id,"Enter restart delay in MINUTES (e.g. 30):");}
         if(text==="🔀 Customize Bet"){
-            if (autobetCfg[id].mode === "COMBINED") {
+            if (isDualLegMode(autobetCfg[id].mode)) {
                 userAction[id]={action:"setcombinedcustom",step:"size"};
-                return send(id,"Enter BIG/SMALL level amounts (example: 1,2,4,8):");
+                return send(id,"Enter CATEGORY level amounts (example: 1,2,4,8):");
             }
             userAction[id]={action:"setsinglecustom",mode:autobetCfg[id].mode};
-            return send(id, autobetCfg[id].mode === "NUMBER" ? "Enter NUMBER bet level amounts (example: 1,9,81,729):" : "Enter BIG/SMALL bet level amounts (example: 1,2,4,8):");
+            return send(id, autobetCfg[id].mode === "NUMBER" ? "Enter NUMBER bet level amounts (example: 1,9,81,729):" : "Enter CATEGORY bet level amounts (example: 1,2,4,8):");
         }
 if(text==="🔢 Set Watch Losses"){
     userAction[id]={action:"setwloss"};
